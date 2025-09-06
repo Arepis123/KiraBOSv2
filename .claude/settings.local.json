@@ -10,7 +10,9 @@
       "Bash(php:*)",
       "Bash(start http://localhost/KiraBOSv2/test_chart.php)",
       "Bash(start http://localhost/KiraBOSv2/admin.php?page=menu)",
-      "Bash(start http://localhost/KiraBOSv2/admin.php?page=users)"
+      "Bash(start http://localhost/KiraBOSv2/admin.php?page=users)",
+      "Bash(start http://localhost/KiraBOSv2/test_payment_debug.php)",
+      "Bash(start http://localhost/phpmyadmin)"
     ],
     "deny": [],
     "ask": []

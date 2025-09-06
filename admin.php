@@ -728,21 +728,50 @@ try {
     $query = "SELECT 
         p.category,
         COUNT(oi.id) as total_items_sold,
-        COALESCE(SUM(oi.subtotal), 0) as total_revenue
+        COALESCE(SUM(oi.subtotal), 0) as total_revenue,
+        COALESCE(SUM(oi.quantity), 0) as total_quantity_sold
         FROM products p
         LEFT JOIN order_items oi ON p.id = oi.product_id
         LEFT JOIN orders o ON oi.order_id = o.id AND o.status = 'completed' AND DATE(o.created_at) >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
-        WHERE p.restaurant_id = :restaurant_id
+        WHERE p.restaurant_id = :restaurant_id AND p.is_active = 1
         GROUP BY p.category
+        HAVING COUNT(DISTINCT p.id) > 0
         ORDER BY total_revenue DESC";
     
     $stmt = $db->prepare($query);
     $stmt->bindParam(':restaurant_id', $restaurant_id);
     $stmt->execute();
-    $category_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $raw_category_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Process category data for chart
+    foreach ($raw_category_data as $cat_data) {
+        $category_sales[] = [
+            'category' => $cat_data['category'],
+            'total_items_sold' => (int)$cat_data['total_items_sold'],
+            'total_revenue' => (float)$cat_data['total_revenue'],
+            'total_quantity_sold' => (int)$cat_data['total_quantity_sold']
+        ];
+    }
+    
+    // If no sales data, show categories with zero values for chart consistency
+    if (empty($category_sales)) {
+        $default_categories = ['Food', 'Drinks', 'Dessert'];
+        foreach ($default_categories as $cat) {
+            $category_sales[] = [
+                'category' => $cat,
+                'total_items_sold' => 0,
+                'total_revenue' => 0,
+                'total_quantity_sold' => 0
+            ];
+        }
+    }
 } catch (Exception $e) {
     // Fallback to basic categories if query fails
-    $category_sales = [];
+    $category_sales = [
+        ['category' => 'Food', 'total_items_sold' => 0, 'total_revenue' => 0, 'total_quantity_sold' => 0],
+        ['category' => 'Drinks', 'total_items_sold' => 0, 'total_revenue' => 0, 'total_quantity_sold' => 0],
+        ['category' => 'Dessert', 'total_items_sold' => 0, 'total_revenue' => 0, 'total_quantity_sold' => 0]
+    ];
 }
 
 // Get all categories for current restaurant (with fallback)
@@ -815,6 +844,168 @@ $stmt = $db->prepare($query);
 $stmt->bindParam(':restaurant_id', $restaurant_id);
 $stmt->execute();
 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get daily sales data for the last 7 days for Sales Trend chart
+$sales_trend_data = [];
+try {
+    $query = "SELECT 
+        DATE(created_at) as date,
+        COALESCE(SUM(total_amount), 0) as daily_sales,
+        COUNT(*) as daily_orders
+        FROM orders 
+        WHERE restaurant_id = :restaurant_id 
+        AND DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+        AND status = 'completed'
+        GROUP BY DATE(created_at)
+        ORDER BY date ASC";
+    
+    $stmt = $db->prepare($query);
+    $stmt->bindParam(':restaurant_id', $restaurant_id);
+    $stmt->execute();
+    $daily_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Create array with all 7 days (including days with no sales)
+    for ($i = 6; $i >= 0; $i--) {
+        $date = date('Y-m-d', strtotime("-$i days"));
+        $day_name = date('M j', strtotime("-$i days"));
+        
+        // Find data for this date
+        $found_data = null;
+        foreach ($daily_data as $data) {
+            if ($data['date'] === $date) {
+                $found_data = $data;
+                break;
+            }
+        }
+        
+        $sales_trend_data[] = [
+            'date' => $date,
+            'day_name' => $day_name,
+            'sales' => $found_data ? (float)$found_data['daily_sales'] : 0,
+            'orders' => $found_data ? (int)$found_data['daily_orders'] : 0
+        ];
+    }
+} catch (Exception $e) {
+    // Fallback data if query fails
+    for ($i = 6; $i >= 0; $i--) {
+        $date = date('Y-m-d', strtotime("-$i days"));
+        $day_name = date('M j', strtotime("-$i days"));
+        $sales_trend_data[] = [
+            'date' => $date,
+            'day_name' => $day_name,
+            'sales' => 0,
+            'orders' => 0
+        ];
+    }
+}
+
+// Get top 3 menu items data for the last 7 days
+$top_menu_items = [];
+try {
+    $query = "SELECT 
+        p.id,
+        p.name,
+        p.category,
+        p.price,
+        COALESCE(SUM(oi.quantity), 0) as total_quantity_sold,
+        COALESCE(SUM(oi.subtotal), 0) as total_revenue
+        FROM products p
+        LEFT JOIN order_items oi ON p.id = oi.product_id
+        LEFT JOIN orders o ON oi.order_id = o.id 
+        WHERE p.restaurant_id = :restaurant_id 
+        AND p.is_active = 1
+        AND (o.id IS NULL OR (o.status = 'completed' AND DATE(o.created_at) >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)))
+        GROUP BY p.id, p.name, p.category, p.price
+        ORDER BY total_quantity_sold DESC, total_revenue DESC
+        LIMIT 5";
+    
+    $stmt = $db->prepare($query);
+    $stmt->bindParam(':restaurant_id', $restaurant_id);
+    $stmt->execute();
+    $menu_items_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Ensure we have exactly 5 items (fill with placeholder if needed)
+    for ($i = 0; $i < 5; $i++) {
+        if (isset($menu_items_data[$i])) {
+            $top_menu_items[] = [
+                'name' => $menu_items_data[$i]['name'],
+                'category' => $menu_items_data[$i]['category'],
+                'price' => (float)$menu_items_data[$i]['price'],
+                'quantity_sold' => (int)$menu_items_data[$i]['total_quantity_sold'],
+                'revenue' => (float)$menu_items_data[$i]['total_revenue']
+            ];
+        } else {
+            // Fill empty slots with placeholder data
+            $top_menu_items[] = [
+                'name' => 'No Data',
+                'category' => '-',
+                'price' => 0,
+                'quantity_sold' => 0,
+                'revenue' => 0
+            ];
+        }
+    }
+} catch (Exception $e) {
+    // Fallback data if query fails
+    $top_menu_items = [
+        ['name' => 'No Data', 'category' => '-', 'price' => 0, 'quantity_sold' => 0, 'revenue' => 0],
+        ['name' => 'No Data', 'category' => '-', 'price' => 0, 'quantity_sold' => 0, 'revenue' => 0],
+        ['name' => 'No Data', 'category' => '-', 'price' => 0, 'quantity_sold' => 0, 'revenue' => 0],
+        ['name' => 'No Data', 'category' => '-', 'price' => 0, 'quantity_sold' => 0, 'revenue' => 0],
+        ['name' => 'No Data', 'category' => '-', 'price' => 0, 'quantity_sold' => 0, 'revenue' => 0]
+    ];
+}
+
+// Get payment type data for the last 7 days
+$payment_type_data = [];
+try {
+    $query = "SELECT 
+        payment_method,
+        COUNT(*) as total_transactions,
+        COALESCE(SUM(total_amount), 0) as total_amount
+        FROM orders 
+        WHERE restaurant_id = :restaurant_id 
+        AND DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+        AND status = 'completed'
+        GROUP BY payment_method
+        ORDER BY total_amount DESC";
+    
+    $stmt = $db->prepare($query);
+    $stmt->bindParam(':restaurant_id', $restaurant_id);
+    $stmt->execute();
+    $payment_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Process payment data and ensure we have both cash and qr
+    $cash_data = ['payment_method' => 'cash', 'total_transactions' => 0, 'total_amount' => 0];
+    $qr_data = ['payment_method' => 'qr', 'total_transactions' => 0, 'total_amount' => 0];
+    
+    foreach ($payment_data as $payment) {
+        if ($payment['payment_method'] === 'cash') {
+            $cash_data = $payment;
+        } elseif ($payment['payment_method'] === 'qr_code') {
+            $qr_data = $payment;
+        }
+    }
+    
+    $payment_type_data = [
+        [
+            'method' => 'Cash',
+            'transactions' => (int)$cash_data['total_transactions'],
+            'amount' => (float)$cash_data['total_amount']
+        ],
+        [
+            'method' => 'QR Code',
+            'transactions' => (int)$qr_data['total_transactions'],
+            'amount' => (float)$qr_data['total_amount']
+        ]
+    ];
+} catch (Exception $e) {
+    // Fallback data if query fails
+    $payment_type_data = [
+        ['method' => 'Cash', 'transactions' => 0, 'amount' => 0],
+        ['method' => 'QR Code', 'transactions' => 0, 'amount' => 0]
+    ];
+}
 ?>
 
 <!DOCTYPE html>
@@ -824,6 +1015,7 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KiraBOS - Admin Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -1354,6 +1546,485 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
             }, 3000);
         }
         
+        // Sales Trend Chart
+        function initializeSalesTrendChart() {
+            const ctx = document.getElementById('salesTrendChart');
+            if (!ctx) return;
+            
+            // Sales trend data from PHP
+            const salesData = <?= json_encode($sales_trend_data) ?>;
+            
+            const labels = salesData.map(item => item.day_name);
+            const salesValues = salesData.map(item => parseFloat(item.sales));
+            const orderCounts = salesData.map(item => parseInt(item.orders));
+            
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Sales (RM)',
+                        data: salesValues,
+                        borderColor: '#10b981',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: '#10b981',
+                        pointBorderColor: '#ffffff',
+                        pointBorderWidth: 2,
+                        pointRadius: 6,
+                        pointHoverRadius: 8
+                    }, {
+                        label: 'Orders',
+                        data: orderCounts,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: '#3b82f6',
+                        pointBorderColor: '#ffffff',
+                        pointBorderWidth: 2,
+                        pointRadius: 6,
+                        pointHoverRadius: 8,
+                        yAxisID: 'y1'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: {
+                                usePointStyle: true,
+                                padding: 20
+                            }
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    if (context.datasetIndex === 0) {
+                                        return 'Sales: RM' + context.parsed.y.toFixed(2);
+                                    } else {
+                                        return 'Orders: ' + context.parsed.y;
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        },
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return 'RM' + value.toFixed(0);
+                                },
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            grid: {
+                                drawOnChartArea: false,
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return value + ' orders';
+                                },
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    }
+                }
+            });
+        }
+        
+        // Top Menu Items Bar Chart
+        function initializeTopMenuChart() {
+            const ctx = document.getElementById('topMenuChart');
+            if (!ctx) return;
+            
+            // Top menu items data from PHP
+            const menuData = <?= json_encode($top_menu_items) ?>;
+            
+            const labels = menuData.map(item => item.name);
+            const quantitySold = menuData.map(item => parseInt(item.quantity_sold));
+            const revenues = menuData.map(item => parseFloat(item.revenue));
+            
+            // Define colors for the bars
+            const colors = [
+                'rgba(255, 193, 7, 0.8)',   // Gold for #1
+                'rgba(108, 117, 125, 0.8)', // Silver for #2
+                'rgba(205, 127, 50, 0.8)',  // Bronze for #3
+                'rgba(74, 144, 226, 0.8)',  // Blue for #4
+                'rgba(156, 39, 176, 0.8)'   // Purple for #5
+            ];
+            
+            const borderColors = [
+                'rgba(255, 193, 7, 1)',
+                'rgba(108, 117, 125, 1)',
+                'rgba(205, 127, 50, 1)',
+                'rgba(74, 144, 226, 1)',
+                'rgba(156, 39, 176, 1)'
+            ];
+            
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Items Sold',
+                        data: quantitySold,
+                        backgroundColor: colors,
+                        borderColor: borderColors,
+                        borderWidth: 2,
+                        borderRadius: {
+                            topLeft: 4,
+                            topRight: 4,
+                            bottomLeft: 0,
+                            bottomRight: 0
+                        },
+                        borderSkipped: 'bottom',
+                        barPercentage: 0.5,
+                        categoryPercentage: 0.8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                title: function(context) {
+                                    return context[0].label;
+                                },
+                                label: function(context) {
+                                    const itemIndex = context.dataIndex;
+                                    const item = menuData[itemIndex];
+                                    return [
+                                        `Items Sold: ${context.parsed.y}`,
+                                        `Revenue: RM${item.revenue.toFixed(2)}`,
+                                        `Category: ${item.category}`
+                                    ];
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: {
+                                display: false
+                            },
+                            ticks: {
+                                font: {
+                                    size: 11
+                                },
+                                maxRotation: 0,
+                                callback: function(value, index) {
+                                    const label = this.getLabelForValue(value);
+                                    // Truncate long labels
+                                    return label.length > 12 ? label.substring(0, 12) + '...' : label;
+                                }
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.1)'
+                            },
+                            ticks: {
+                                stepSize: 1,
+                                font: {
+                                    size: 11
+                                },
+                                callback: function(value) {
+                                    return Math.floor(value) === value ? value : '';
+                                }
+                            }
+                        }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    }
+                }
+            });
+        }
+        
+        // Category Performance Doughnut Chart
+        function initializeCategoryChart() {
+            const ctx = document.getElementById('categoryChart');
+            if (!ctx) return;
+            
+            // Category performance data from PHP
+            const categoryData = <?= json_encode($category_sales) ?>;
+            
+            // Filter out categories with no revenue for cleaner chart
+            const categoriesWithSales = categoryData.filter(cat => cat.total_revenue > 0);
+            
+            // If no sales data, show a placeholder chart
+            if (categoriesWithSales.length === 0) {
+                const emptyChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['No Data'],
+                        datasets: [{
+                            data: [1],
+                            backgroundColor: ['rgba(200, 200, 200, 0.5)'],
+                            borderColor: ['rgba(150, 150, 150, 1)'],
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                enabled: false
+                            }
+                        }
+                    }
+                });
+                return;
+            }
+            
+            const labels = categoriesWithSales.map(cat => cat.category);
+            const revenues = categoriesWithSales.map(cat => parseFloat(cat.total_revenue));
+            const quantities = categoriesWithSales.map(cat => parseInt(cat.total_quantity_sold));
+            
+            // Define colors for categories
+            const colors = [
+                'rgba(255, 107, 107, 0.8)', // Red
+                'rgba(78, 205, 196, 0.8)',  // Teal
+                'rgba(255, 230, 109, 0.8)', // Yellow
+                'rgba(116, 185, 255, 0.8)', // Blue
+                'rgba(162, 155, 254, 0.8)', // Purple
+                'rgba(255, 159, 67, 0.8)',  // Orange
+                'rgba(72, 219, 251, 0.8)'   // Cyan
+            ];
+            
+            const borderColors = [
+                'rgba(255, 107, 107, 1)',
+                'rgba(78, 205, 196, 1)',
+                'rgba(255, 230, 109, 1)',
+                'rgba(116, 185, 255, 1)',
+                'rgba(162, 155, 254, 1)',
+                'rgba(255, 159, 67, 1)',
+                'rgba(72, 219, 251, 1)'
+            ];
+            
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Revenue',
+                        data: revenues,
+                        backgroundColor: colors.slice(0, labels.length),
+                        borderColor: borderColors.slice(0, labels.length),
+                        borderWidth: 2,
+                        hoverOffset: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    cutout: '60%', // Makes it a doughnut (hollow center)
+                    plugins: {
+                        legend: {
+                            display: false // We'll use custom legend below chart
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const category = context.label;
+                                    const revenue = context.parsed;
+                                    const quantity = quantities[context.dataIndex];
+                                    const percentage = ((revenue / revenues.reduce((a, b) => a + b, 0)) * 100).toFixed(1);
+                                    
+                                    return [
+                                        `${category}`,
+                                        `Revenue: RM${revenue.toFixed(2)}`,
+                                        `Items Sold: ${quantity}`,
+                                        `Share: ${percentage}%`
+                                    ];
+                                }
+                            },
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: 'white',
+                            bodyColor: 'white',
+                            cornerRadius: 6,
+                            padding: 10
+                        }
+                    },
+                    animation: {
+                        animateRotate: true,
+                        animateScale: false,
+                        duration: 1000,
+                        easing: 'easeInOutCubic'
+                    },
+                    interaction: {
+                        intersect: false
+                    }
+                }
+            });
+        }
+        
+        // Payment Type Doughnut Chart
+        function initializePaymentChart() {
+            const ctx = document.getElementById('paymentChart');
+            if (!ctx) return;
+            
+            // Payment type data from PHP
+            const paymentData = <?= json_encode($payment_type_data) ?>;
+            
+            // Filter out payment methods with no transactions for cleaner chart
+            const paymentsWithTransactions = paymentData.filter(payment => payment.amount > 0);
+            
+            // If no payment data, show a placeholder chart
+            if (paymentsWithTransactions.length === 0) {
+                const emptyChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['No Data'],
+                        datasets: [{
+                            data: [1],
+                            backgroundColor: ['rgba(200, 200, 200, 0.5)'],
+                            borderColor: ['rgba(150, 150, 150, 1)'],
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                enabled: false
+                            }
+                        }
+                    }
+                });
+                return;
+            }
+            
+            const labels = paymentsWithTransactions.map(payment => payment.method);
+            const amounts = paymentsWithTransactions.map(payment => parseFloat(payment.amount));
+            const transactions = paymentsWithTransactions.map(payment => parseInt(payment.transactions));
+            
+            // Define colors for payment methods
+            const colors = [
+                'rgba(16, 185, 129, 0.8)', // Green for Cash
+                'rgba(59, 130, 246, 0.8)',  // Blue for QR Code
+                'rgba(245, 158, 11, 0.8)',  // Amber for other methods
+                'rgba(139, 92, 246, 0.8)'   // Purple for additional methods
+            ];
+            
+            const borderColors = [
+                'rgba(16, 185, 129, 1)',
+                'rgba(59, 130, 246, 1)',
+                'rgba(245, 158, 11, 1)',
+                'rgba(139, 92, 246, 1)'
+            ];
+            
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Payment Amount',
+                        data: amounts,
+                        backgroundColor: colors.slice(0, labels.length),
+                        borderColor: borderColors.slice(0, labels.length),
+                        borderWidth: 2,
+                        hoverOffset: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    cutout: '60%', // Makes it a doughnut (hollow center)
+                    plugins: {
+                        legend: {
+                            display: false // We'll use custom legend below chart
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const method = context.label;
+                                    const amount = context.parsed;
+                                    const transactionCount = transactions[context.dataIndex];
+                                    const percentage = ((amount / amounts.reduce((a, b) => a + b, 0)) * 100).toFixed(1);
+                                    
+                                    return [
+                                        `${method}`,
+                                        `Amount: RM${amount.toFixed(2)}`,
+                                        `Transactions: ${transactionCount}`,
+                                        `Share: ${percentage}%`
+                                    ];
+                                }
+                            },
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: 'white',
+                            bodyColor: 'white',
+                            cornerRadius: 6,
+                            padding: 10
+                        }
+                    },
+                    animation: {
+                        animateRotate: true,
+                        animateScale: false,
+                        duration: 1000,
+                        easing: 'easeInOutCubic'
+                    },
+                    interaction: {
+                        intersect: false
+                    }
+                }
+            });
+        }
+        
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
             // Initialize theme
@@ -1365,6 +2036,12 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             // Auto-hide messages
             autoHideMessages();
+            
+            // Initialize Charts
+            initializeSalesTrendChart();
+            initializeTopMenuChart();
+            initializeCategoryChart();
+            initializePaymentChart();
         });
     </script>
 </body>

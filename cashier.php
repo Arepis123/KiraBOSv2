@@ -829,7 +829,7 @@ $category_names = array_keys($categories);
                             <span>💵</span>
                             <span>Cash</span>
                         </button>
-                        <button id="qr-btn" onclick="selectPaymentMethod('qr')" class="flex-1 bg-gray-200 text-gray-700 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center space-x-1 transition-colors">
+                        <button id="qr-btn" onclick="selectPaymentMethod('qr_code')" class="flex-1 bg-gray-200 text-gray-700 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center space-x-1 transition-colors">
                             <span>📱</span>
                             <span>QR Code</span>
                         </button>
@@ -1338,7 +1338,7 @@ $category_names = array_keys($categories);
                 
                 cashSection.classList.remove('hidden');
                 qrSection.classList.add('hidden');
-            } else {
+            } else if (method === 'qr_code') {
                 qrBtn.classList.remove('bg-gray-200', 'text-gray-700');
                 qrBtn.classList.add('bg-primary', 'text-white');
                 cashBtn.classList.remove('bg-primary', 'text-white');
@@ -1412,7 +1412,7 @@ $category_names = array_keys($categories);
         function updatePaymentButton() {
             const completeBtn = document.getElementById('complete-payment-btn');
             
-            if (currentPaymentMethod === 'qr') {
+            if (currentPaymentMethod === 'qr_code') {
                 if (completeBtn) {
                     completeBtn.disabled = false;
                     completeBtn.textContent = 'Complete Payment';
@@ -1457,7 +1457,7 @@ $category_names = array_keys($categories);
                 }
                 paymentData.amount_tendered = tenderedRounded;
                 paymentData.change_given = tenderedRounded - totalRounded;
-            } else {
+            } else if (currentPaymentMethod === 'qr_code') {
                 // For QR code payments, amount tendered equals the total
                 const totalRounded = Math.round(currentTotal * 100) / 100;
                 paymentData.amount_tendered = totalRounded;
