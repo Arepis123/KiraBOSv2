@@ -2,13 +2,33 @@
 class Database {
     private static $instance = null;
     private $conn = null;
-    private $host = 'localhost';
-    private $db_name = 'kirabos_multitenant';
-    private $username = 'root';  // Change this to your MySQL username
-    private $password = '';      // Change this to your MySQL password
+    private $host;
+    private $db_name;
+    private $username;
+    private $password;
 
     private function __construct() {
-        // Private constructor prevents external instantiation
+        // Auto-detect environment and set appropriate database credentials
+        $this->setDatabaseCredentials();
+    }
+    
+    private function setDatabaseCredentials() {
+        // Check if we're on a production server (you can customize this detection)
+        $isProduction = !empty($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== 'localhost';
+        
+        if ($isProduction) {
+            // Production credentials - UPDATE THESE WITH YOUR ACTUAL PRODUCTION VALUES
+            $this->host = 'localhost';
+            $this->db_name = 'kirabos_multitenant';
+            $this->username = 'test';  
+            $this->password = ' 357u1oLM#';
+        } else {
+            // Local development credentials
+            $this->host = 'localhost';
+            $this->db_name = 'kirabos_multitenant';
+            $this->username = 'root';
+            $this->password = '';
+        }
     }
 
     public static function getInstance() {
