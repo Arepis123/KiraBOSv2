@@ -21,7 +21,7 @@ class Database {
             $this->host = 'localhost';
             $this->db_name = 'kirabos_multitenant';
             $this->username = 'test';  
-            $this->password = ' 357u1oLM#';
+            $this->password = '357u1oLM#';
         } else {
             // Local development credentials
             $this->host = 'localhost';
