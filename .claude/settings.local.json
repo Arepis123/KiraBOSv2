@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir)",
+      "Bash(start http://localhost/KiraBOSv2/admin.php)",
+      "Bash(start http://localhost/KiraBOSv2/test_admin_features.php)",
+      "Bash(start http://localhost/KiraBOSv2/debug_orders.php)",
+      "Bash(grep:*)",
+      "Bash(start http://localhost/KiraBOSv2/cashier.php)",
+      "Bash(php:*)",
+      "Bash(start http://localhost/KiraBOSv2/test_chart.php)",
+      "Bash(start http://localhost/KiraBOSv2/admin.php?page=menu)",
+      "Bash(start http://localhost/KiraBOSv2/admin.php?page=users)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
