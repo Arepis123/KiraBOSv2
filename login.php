@@ -176,10 +176,10 @@ if ($_POST) {
 
         <div class="mt-8 text-center">
             <p class="text-sm text-gray-600">
-                Demo accounts:<br>
-                <span class="font-mono bg-gray-100 px-2 py-1 rounded">admin / admin123</span><br>
-                <span class="font-mono bg-gray-100 px-2 py-1 rounded">cashier / cashier123</span><br>
-                <span class="text-xs text-gray-500 mt-2 block">Available for Demo Restaurant, Pizza Palace, and Burger House</span>
+                Demo accounts:<br><br>
+                <span class="font-mono bg-gray-100 px-2 py-1 rounded">hafiz / hafiz3020  (Admin)</span><br>
+                <span class="font-mono bg-gray-100 px-2 py-1 rounded">man / 123 (Cashier)</span><br>
+                <!-- <span class="text-xs text-gray-500 mt-2 block">Available for Demo Restaurant, Pizza Palace, and Burger House</span> -->
             </p>
         </div>
         
