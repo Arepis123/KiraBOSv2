@@ -1,76 +1,83 @@
 <?php
-// get_order_details.php - AJAX endpoint for order details
-session_start();
-require_once 'config.php';
+// Start output buffering to prevent any accidental output
+ob_start();
 
-header('Content-Type: application/json');
+require_once "config.php";
 
-// Use Security class validation
-Security::requireAdmin();
-$restaurant_id = Security::getRestaurantId();
+// Clear any previous output and set JSON header
+ob_clean();
+header("Content-Type: application/json");
 
-// Validate CSRF token (we'll skip for AJAX, but in production you should include it)
-if (!isset($_POST['order_id']) || empty($_POST['order_id'])) {
-    echo json_encode(['success' => false, 'error' => 'Order ID required']);
-    exit;
+// Start session if not already started
+if (session_status() == PHP_SESSION_NONE) {
+    session_start();
 }
 
-$order_id = (int)$_POST['order_id'];
+// Check if user is logged in
+if (!isset($_SESSION['user_id']) || !isset($_SESSION['restaurant_id'])) {
+    echo json_encode(["success" => false, "error" => "Not authenticated"]);
+    exit();
+}
+
+if ($_SERVER["REQUEST_METHOD"] !== "POST") {
+    echo json_encode(["success" => false, "error" => "Invalid request method"]);
+    exit();
+}
+
+$order_id = null;
+if (isset($_POST["order_id"]) && !empty($_POST["order_id"])) {
+    $order_id = (int)$_POST["order_id"];
+} else {
+    // Try to get from raw input in case of content-type issues
+    $raw_input = file_get_contents('php://input');
+    parse_str($raw_input, $parsed_input);
+    if (isset($parsed_input["order_id"]) && !empty($parsed_input["order_id"])) {
+        $order_id = (int)$parsed_input["order_id"];
+    }
+}
+
+if ($order_id === null || $order_id <= 0) {
+    echo json_encode(["success" => false, "error" => "Order ID is required"]);
+    exit();
+}
 
 try {
-    $database = new Database();
+    $database = Database::getInstance();
     $db = $database->getConnection();
+    $restaurant_id = (int)$_SESSION['restaurant_id'];
+    // $order_id is already set above
     
-    if (!$db) {
-        echo json_encode(['success' => false, 'error' => 'Database connection failed']);
-        exit;
-    }
-    
-    // First verify the order belongs to the current restaurant
-    $order_check = "SELECT id FROM orders WHERE id = :order_id AND restaurant_id = :restaurant_id";
-    $check_stmt = $db->prepare($order_check);
-    $check_stmt->bindParam(':order_id', $order_id, PDO::PARAM_INT);
-    $check_stmt->bindParam(':restaurant_id', $restaurant_id, PDO::PARAM_INT);
-    $check_stmt->execute();
-    
-    if ($check_stmt->rowCount() == 0) {
-        echo json_encode(['success' => false, 'error' => 'Order not found or access denied']);
-        exit;
-    }
-    
-    // Get order items with product details
-    $query = "SELECT oi.*, 
-                     COALESCE(oi.product_name, p.name) as product_name,
-                     p.category,
-                     oi.product_price as price
-              FROM order_items oi 
-              LEFT JOIN products p ON oi.product_id = p.id AND p.restaurant_id = :restaurant_id
-              WHERE oi.order_id = :order_id
-              ORDER BY oi.id";
+    $query = "SELECT 
+        oi.quantity,
+        oi.subtotal,
+        p.name as product_name,
+        p.category,
+        p.price
+        FROM order_items oi
+        JOIN products p ON oi.product_id = p.id
+        JOIN orders o ON oi.order_id = o.id
+        WHERE o.id = :order_id 
+        AND o.restaurant_id = :restaurant_id
+        ORDER BY p.name";
     
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':order_id', $order_id, PDO::PARAM_INT);
-    $stmt->bindParam(':restaurant_id', $restaurant_id, PDO::PARAM_INT);
+    $stmt->bindParam(":order_id", $order_id);
+    $stmt->bindParam(":restaurant_id", $restaurant_id);
     $stmt->execute();
     
     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    if ($items) {
-        echo json_encode([
-            'success' => true, 
-            'items' => $items,
-            'count' => count($items)
-        ]);
-    } else {
-        echo json_encode([
-            'success' => true, 
-            'items' => [],
-            'count' => 0,
-            'message' => 'No items found for this order'
-        ]);
+    if (empty($items)) {
+        echo json_encode(["success" => false, "error" => "No items found for this order"]);
+        exit();
     }
     
+    echo json_encode([
+        "success" => true,
+        "items" => $items
+    ]);
+    
 } catch (Exception $e) {
-    echo json_encode(['success' => false, 'error' => 'Database error: ' . $e->getMessage()]);
+    echo json_encode(["success" => false, "error" => "Database error: " . $e->getMessage()]);
 }
 ?>

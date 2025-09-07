@@ -98,6 +98,51 @@ if ($_POST && isset($_POST['action'])) {
         exit();
     }
     
+    if ($_POST['action'] === 'add_expense') {
+        try {
+            // Validate input
+            $category = Security::sanitize($_POST['category'] ?? '');
+            $amount = floatval($_POST['amount'] ?? 0);
+            $description = Security::sanitize($_POST['description'] ?? '');
+            
+            if (empty($category) || $amount <= 0) {
+                echo json_encode(['success' => false, 'message' => 'Invalid expense data']);
+                exit();
+            }
+            
+            // Valid categories
+            $validCategories = ['ingredients', 'supplies', 'maintenance', 'delivery', 'utilities', 'other'];
+            if (!in_array($category, $validCategories)) {
+                echo json_encode(['success' => false, 'message' => 'Invalid category']);
+                exit();
+            }
+            
+            // Insert expense into database
+            $query = "INSERT INTO expenses (restaurant_id, user_id, category, amount, description, created_at) VALUES (?, ?, ?, ?, ?, NOW())";
+            $stmt = $db->prepare($query);
+            $result = $stmt->execute([
+                $restaurant_id,
+                $_SESSION['user_id'],
+                $category,
+                $amount,
+                $description
+            ]);
+            
+            if ($result) {
+                echo json_encode([
+                    'success' => true, 
+                    'message' => 'Expense added successfully',
+                    'expense_id' => $db->lastInsertId()
+                ]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Failed to save expense']);
+            }
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => 'Error adding expense: ' . $e->getMessage()]);
+        }
+        exit();
+    }
+    
     if ($_POST['action'] === 'checkout') {
         if (!empty($_SESSION['cart'])) {
             try {
@@ -177,6 +222,17 @@ if ($_POST && isset($_POST['action'])) {
                     $stmt->execute();
                 }
                 
+                // Reduce stock quantities for products that track stock
+                $stock_query = "UPDATE products SET stock_quantity = stock_quantity - :reduce_qty WHERE id = :product_id AND track_stock = 1 AND stock_quantity >= :min_qty";
+                $stock_stmt = $db->prepare($stock_query);
+                
+                foreach ($_SESSION['cart'] as $item) {
+                    $stock_stmt->bindParam(':reduce_qty', $item['quantity']);
+                    $stock_stmt->bindParam(':min_qty', $item['quantity']);
+                    $stock_stmt->bindParam(':product_id', $item['id']);
+                    $stock_stmt->execute();
+                }
+                
                 $db->commit();
                 $_SESSION['cart'] = [];
                 
@@ -202,15 +258,22 @@ if ($_POST && isset($_POST['action'])) {
     }
 }
 
-// Get active categories for current restaurant
-$query = "SELECT name FROM categories WHERE restaurant_id = :restaurant_id AND is_active = 1 ORDER BY sort_order, name";
+// Get active categories with colors for current restaurant
+$query = "SELECT name, color FROM categories WHERE restaurant_id = :restaurant_id AND is_active = 1 ORDER BY sort_order, name";
 $stmt = $db->prepare($query);
 $stmt->bindParam(':restaurant_id', $restaurant_id);
 $stmt->execute();
-$active_categories = $stmt->fetchAll(PDO::FETCH_COLUMN);
+$active_categories_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Create lookup arrays for easy access
+$active_categories = array_column($active_categories_data, 'name');
+$category_colors = [];
+foreach ($active_categories_data as $cat) {
+    $category_colors[$cat['name']] = $cat['color'] ?? '#6B7280'; // Default gray if no color
+}
 
 // Get products for current restaurant - using JOIN to only get products from active categories
-$query = "SELECT p.* FROM products p 
+$query = "SELECT p.*, c.sort_order as category_sort_order FROM products p 
           INNER JOIN categories c ON p.category = c.name AND c.restaurant_id = p.restaurant_id 
           WHERE p.restaurant_id = :restaurant_id AND p.is_active = 1 AND c.is_active = 1 
           ORDER BY c.sort_order, p.category, p.name";
@@ -218,6 +281,27 @@ $stmt = $db->prepare($query);
 $stmt->bindParam(':restaurant_id', $restaurant_id);
 $stmt->execute();
 $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get today's expenses for current restaurant
+$today_expenses = [];
+$today_expenses_total = 0;
+try {
+    $query = "SELECT category, amount, description, created_at, user_id 
+              FROM expenses 
+              WHERE restaurant_id = :restaurant_id 
+              AND DATE(created_at) = CURDATE() 
+              ORDER BY created_at DESC";
+    $stmt = $db->prepare($query);
+    $stmt->bindParam(':restaurant_id', $restaurant_id);
+    $stmt->execute();
+    $today_expenses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Calculate today's total
+    $today_expenses_total = array_sum(array_column($today_expenses, 'amount'));
+} catch (Exception $e) {
+    // If expenses table doesn't exist or there's an error, continue without expenses
+    error_log("Error fetching expenses: " . $e->getMessage());
+}
 
 // Group products by category (only active categories will be shown)
 $categories = [];
@@ -266,6 +350,7 @@ $category_names = array_keys($categories);
             --border-primary: #e0e7ff;
             --accent-primary: #4f46e5;
             --accent-secondary: #6366f1;
+            --hover-bg: #f3f4f6;
         }
         
         [data-theme="dark"] {
@@ -278,6 +363,7 @@ $category_names = array_keys($categories);
             --border-primary: #4b5563;
             --accent-primary: #818cf8;
             --accent-secondary: #a78bfa;
+            --hover-bg: #374151;
         }
         
         [data-theme="minimal"] {
@@ -290,6 +376,7 @@ $category_names = array_keys($categories);
             --border-primary: #e2e8f0;
             --accent-primary: #0f172a;
             --accent-secondary: #334155;
+            --hover-bg: #e2e8f0;
         }
         
         [data-theme="original"] {
@@ -302,6 +389,7 @@ $category_names = array_keys($categories);
             --border-primary: #e5e7eb;
             --accent-primary: #4f46e5;
             --accent-secondary: #6366f1;
+            --hover-bg: #f3f4f6;
         }
         
         .scrollbar-hide {
@@ -346,15 +434,9 @@ $category_names = array_keys($categories);
         }
         
         .success {
-            background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
-            transform: scale(1.02);
+            /* Removed purple background overlay - keep only subtle effects */
+            transform: scale(1.01);
             transition: all 0.3s ease;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            text-align: center !important;
-            color: white !important;
-            font-weight: 600 !important;
         }
         
         /* Button Loading States */
@@ -400,6 +482,25 @@ $category_names = array_keys($categories);
         
         .toast.removing {
             animation: slideOut 0.3s ease forwards;
+        }
+        
+        /* Modal Animations */
+        #clear-order-modal {
+            backdrop-filter: blur(4px);
+        }
+        
+        #modal-content {
+            transition: transform 0.2s ease-in-out, opacity 0.2s ease-in-out;
+        }
+        
+        #modal-content.scale-95 {
+            transform: scale(0.95);
+            opacity: 0.9;
+        }
+        
+        #modal-content.scale-100 {
+            transform: scale(1);
+            opacity: 1;
         }
         
         /* Cart Item Animations */
@@ -644,31 +745,6 @@ $category_names = array_keys($categories);
                         </div>
                     </div>
                     <div class="flex items-center space-x-2 sm:space-x-4">
-                        <!-- Theme Switcher -->
-                        <div class="relative">
-                            <button id="theme-toggle" class="flex items-center space-x-1 px-2 py-1 rounded-lg bg-white/50 hover:bg-white/80 transition-colors border border-indigo-200">
-                                <span id="theme-icon" class="text-sm">🎨</span>
-                                <span id="theme-text" class="text-xs font-medium text-gray-700 hidden sm:inline">Colorful</span>
-                                <svg class="w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-                                </svg>
-                            </button>
-                            <div id="theme-dropdown" class="absolute right-0 mt-1 w-32 bg-white rounded-lg shadow-lg border border-gray-200 z-50 hidden">
-                                <button onclick="setTheme('colorful')" class="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 rounded-t-lg flex items-center space-x-2">
-                                    <span>🎨</span><span>Colorful</span>
-                                </button>
-                                <button onclick="setTheme('dark')" class="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center space-x-2">
-                                    <span>🌙</span><span>Dark</span>
-                                </button>
-                                <button onclick="setTheme('minimal')" class="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 flex items-center space-x-2">
-                                    <span>⚪</span><span>Minimal</span>
-                                </button>
-                                <button onclick="setTheme('original')" class="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 rounded-b-lg flex items-center space-x-2">
-                                    <span>⚫</span><span>Original</span>
-                                </button>
-                            </div>
-                        </div>
-                        
                         <span class="text-xs sm:text-sm text-gray-600 hidden xs:inline">Welcome, <?= htmlspecialchars($_SESSION['first_name'] ?? $_SESSION['username']) ?></span>
                         <span class="text-xs sm:text-sm text-gray-600 xs:hidden"><?= htmlspecialchars($_SESSION['first_name'] ?? $_SESSION['username']) ?></span>
                         <a href="logout.php" class="text-accent hover:text-red-600 text-xs sm:text-sm font-medium">Logout</a>
@@ -676,17 +752,21 @@ $category_names = array_keys($categories);
                 </div>
 
                 <!-- Category Tabs -->
-                <div class="flex space-x-1 bg-white/50 p-1 rounded-lg shadow-sm">
+                <div id="category-tabs-container" class="flex space-x-1 bg-white/50 p-1 rounded-lg shadow-sm">
                     <button onclick="showAllProducts(this)" class="tab-btn active px-4 py-2 rounded-md font-medium text-sm transition-colors bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-sm">All</button>
                     <?php foreach ($category_names as $category): 
-                        $categoryColors = [
-                            'Food' => 'from-red-400 to-pink-500',
-                            'Drinks' => 'from-cyan-400 to-teal-500', 
-                            'Dessert' => 'from-yellow-400 to-orange-500'
-                        ];
-                        $colorClass = $categoryColors[$category] ?? 'from-gray-400 to-gray-500';
+                        $category_color = $category_colors[$category] ?? '#6B7280';
+                        // Create hover style using the custom color
+                        $hover_style = "background: linear-gradient(135deg, {$category_color}, {$category_color}DD); color: white;";
+                        $normal_style = "color: #6b7280;";
                     ?>
-                        <button onclick="showCategory('<?= strtolower($category) ?>', this)" class="tab-btn px-4 py-2 rounded-md font-medium text-sm transition-colors text-gray-600 hover:bg-gradient-to-r hover:<?= $colorClass ?> hover:text-white"><?= htmlspecialchars($category) ?></button>
+                        <button onclick="showCategory('<?= strtolower($category) ?>', this)" 
+                                class="tab-btn px-4 py-2 rounded-md font-medium text-sm transition-colors" 
+                                style="color: #6b7280;"
+                                onmouseover="this.style.cssText='<?= $hover_style ?>'" 
+                                onmouseout="this.style.cssText='<?= $normal_style ?>'">
+                            <?= htmlspecialchars($category) ?>
+                        </button>
                     <?php endforeach; ?>
                 </div>
             </div>
@@ -695,39 +775,100 @@ $category_names = array_keys($categories);
             <div class="flex-1 overflow-y-auto scrollbar-hide p-4">
                 <div class="product-grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 sm:gap-4">
                     <?php foreach ($products as $product): 
-                        $categoryBg = [
-                            'Food' => 'from-red-100 to-pink-100 border-red-200',
-                            'Drinks' => 'from-cyan-100 to-teal-100 border-cyan-200',
-                            'Dessert' => 'from-yellow-100 to-orange-100 border-yellow-200'
-                        ];
-                        $categoryAccent = [
-                            'Food' => 'from-red-400 to-pink-500',
-                            'Drinks' => 'from-cyan-400 to-teal-500',
-                            'Dessert' => 'from-yellow-400 to-orange-500'
-                        ];
-                        $bgClass = $categoryBg[$product['category']] ?? 'from-gray-100 to-gray-200 border-gray-200';
-                        $accentClass = $categoryAccent[$product['category']] ?? 'from-gray-400 to-gray-500';
+                        $category_color = $category_colors[$product['category']] ?? '#6B7280';
+                        
+                        // Convert hex to lighter RGB for background
+                        $hex = ltrim($category_color, '#');
+                        $r = hexdec(substr($hex, 0, 2));
+                        $g = hexdec(substr($hex, 2, 2));
+                        $b = hexdec(substr($hex, 4, 2));
+                        
+                        // Create light background and border colors
+                        $light_bg = "rgba({$r}, {$g}, {$b}, 0.1)";
+                        $border_color = "rgba({$r}, {$g}, {$b}, 0.3)";
+                        $accent_color = $category_color;
                     ?>
-                        <div class="product-card theme-card rounded-xl shadow-sm hover:shadow-lg transition-all duration-200 cursor-pointer border hover:scale-105 flex flex-col items-center justify-center text-center" 
+                        <?php 
+                        $is_out_of_stock = $product['track_stock'] && ($product['stock_quantity'] ?? 0) <= 0;
+                        $card_classes = "product-card theme-card rounded-xl shadow-sm transition-all duration-200 border flex flex-col items-center justify-center text-center";
+                        $onclick_handler = '';
+                        
+                        if ($is_out_of_stock) {
+                            $card_classes .= " opacity-60 cursor-not-allowed";
+                            $onclick_handler = 'onclick="showOutOfStockMessage()"';
+                        } else {
+                            $card_classes .= " hover:shadow-lg cursor-pointer hover:scale-105";
+                            $onclick_handler = 'onclick="addToCart(' . $product['id'] . ', \'' . htmlspecialchars($product['name']) . '\', ' . $product['price'] . ', this)"';
+                        }
+                        ?>
+                        <div class="<?= $card_classes ?>" 
                              data-category="<?= strtolower($product['category']) ?>"
                              data-name="<?= strtolower($product['name']) ?>"
-                             data-bg-class="<?= $bgClass ?>"
-                             data-accent-class="<?= $accentClass ?>"
-                             onclick="addToCart(<?= $product['id'] ?>, '<?= htmlspecialchars($product['name']) ?>', <?= $product['price'] ?>, this)">
-                            <div class="aspect-square theme-card-header rounded-t-xl flex items-center justify-center relative overflow-hidden" data-accent-class="<?= $accentClass ?>">
-                                <div class="absolute inset-0 bg-white/20 theme-overlay"></div>
-                                <div class="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-full flex items-center justify-center shadow-sm z-10 theme-icon-container">
-                                    <span class="text-xl sm:text-2xl">
-                                        <?php
-                                        $icons = [
-                                            'Food' => '🍔',
-                                            'Drinks' => '☕',
-                                            'Dessert' => '🍰'
-                                        ];
-                                        echo $icons[$product['category']] ?? '🍽️';
-                                        ?>
-                                    </span>
-                                </div>
+                             data-product-id="<?= $product['id'] ?>"
+                             data-track-stock="<?= $product['track_stock'] ? '1' : '0' ?>"
+                             data-current-stock="<?= (int)($product['stock_quantity'] ?? 0) ?>"
+                             data-max-stock="<?= (int)($product['max_stock_level'] ?? 100) ?>"
+                             data-min-stock="<?= (int)($product['min_stock_level'] ?? 0) ?>"
+                             style="background: <?= $light_bg ?>; border-color: <?= $border_color ?>;"
+                             <?= $onclick_handler ?>>
+                            <div class="aspect-square theme-card-header rounded-t-xl flex items-center justify-center relative overflow-hidden" style="background: <?= $accent_color ?>;">
+                                <?php 
+                                // Stock badge logic
+                                $stock_badge_html = '';
+                                if ($product['track_stock']) {
+                                    $stock_qty = (int)($product['stock_quantity'] ?? 0);
+                                    $max_level = (int)($product['max_stock_level'] ?? 100);
+                                    $min_level = (int)($product['min_stock_level'] ?? 0);
+                                    
+                                    // Determine badge color and status
+                                    if ($stock_qty <= 0) {
+                                        $badge_color = 'bg-red-500';
+                                        $badge_text = '0/' . $max_level;
+                                        $text_color = 'text-white';
+                                    } elseif ($stock_qty <= $min_level) {
+                                        $badge_color = 'bg-orange-500';
+                                        $badge_text = $stock_qty . '/' . $max_level;
+                                        $text_color = 'text-white';
+                                    } else {
+                                        $badge_color = 'bg-green-500';
+                                        $badge_text = $stock_qty . '/' . $max_level;
+                                        $text_color = 'text-white';
+                                    }
+                                    
+                                    $stock_badge_html = "<div id='stock-badge-{$product['id']}' class='absolute top-2 right-2 px-2 py-1 rounded-full text-xs font-bold $badge_color $text_color z-10 shadow-lg'>$badge_text</div>";
+                                    // Debug: Log badge generation
+                                    error_log("Generated badge for product {$product['id']} ({$product['name']}): $stock_badge_html");
+                                }
+                                ?>
+                                
+                                <?php if ($stock_badge_html): ?>
+                                    <?php error_log("Outputting badge for product {$product['id']}: {$stock_badge_html}"); ?>
+                                    <!-- DEBUG: Badge for product <?= $product['id'] ?> (<?= $product['name'] ?>) -->
+                                    <?= $stock_badge_html ?>
+                                <?php endif; ?>
+                                
+                                <?php if ($product['image'] && file_exists(__DIR__ . '/' . $product['image'])): ?>
+                                    <!-- Product Image -->
+                                    <img src="<?= htmlspecialchars($product['image']) ?>" 
+                                         alt="<?= htmlspecialchars($product['name']) ?>" 
+                                         class="w-full h-full object-cover">
+                                    <div class="absolute inset-0 bg-black/10"></div>
+                                <?php else: ?>
+                                    <!-- Fallback to Category Icon -->
+                                    <div class="absolute inset-0 bg-white/20 theme-overlay"></div>
+                                    <div class="w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-full flex items-center justify-center shadow-sm z-10 theme-icon-container">
+                                        <span class="text-xl sm:text-2xl">
+                                            <?php
+                                            $icons = [
+                                                'Food' => '🍔',
+                                                'Drinks' => '☕',
+                                                'Dessert' => '🍰'
+                                            ];
+                                            echo $icons[$product['category']] ?? '🍽️';
+                                            ?>
+                                        </span>
+                                    </div>
+                                <?php endif; ?>
                             </div>
                             <div class="p-2.5 theme-card-content rounded-b-xl" style="background: var(--bg-secondary)">
                                 <h3 class="font-medium text-sm truncate leading-tight" style="color: var(--text-primary)"><?= htmlspecialchars($product['name']) ?></h3>
@@ -738,10 +879,167 @@ $category_names = array_keys($categories);
                 </div>
             </div>
 
+            <!-- Expenses Section -->
+            <div id="expenses-section" class="flex-1 overflow-y-auto scrollbar-hide p-4 hidden">
+                <!-- Expenses Header -->
+                <div class="mb-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-bold" style="color: var(--text-primary)">Daily Expenses</h2>
+                        <div class="bg-green-100 px-3 py-1 rounded-full">
+                            <span class="text-sm font-medium text-green-800">Today: <?= htmlspecialchars($restaurant['currency']) ?><span id="today-expenses-total"><?= number_format($today_expenses_total, 2) ?></span></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Category Buttons Grid -->
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <button onclick="selectExpenseCategory('ingredients', '🥬')" class="expense-category-btn p-4 rounded-xl theme-transition border-2 border-transparent hover:border-green-300" style="background: var(--bg-secondary);">
+                        <div class="text-3xl mb-2">🥬</div>
+                        <div class="text-sm font-medium" style="color: var(--text-primary)">Ingredients</div>
+                        <div class="text-xs" style="color: var(--text-secondary)">Food purchases</div>
+                    </button>
+                    
+                    <button onclick="selectExpenseCategory('supplies', '🧹')" class="expense-category-btn p-4 rounded-xl theme-transition border-2 border-transparent hover:border-blue-300" style="background: var(--bg-secondary);">
+                        <div class="text-3xl mb-2">🧹</div>
+                        <div class="text-sm font-medium" style="color: var(--text-primary)">Supplies</div>
+                        <div class="text-xs" style="color: var(--text-secondary)">Cleaning, packaging</div>
+                    </button>
+                    
+                    <button onclick="selectExpenseCategory('maintenance', '🔧')" class="expense-category-btn p-4 rounded-xl theme-transition border-2 border-transparent hover:border-orange-300" style="background: var(--bg-secondary);">
+                        <div class="text-3xl mb-2">🔧</div>
+                        <div class="text-sm font-medium" style="color: var(--text-primary)">Maintenance</div>
+                        <div class="text-xs" style="color: var(--text-secondary)">Repairs, tools</div>
+                    </button>
+                    
+                    <button onclick="selectExpenseCategory('delivery', '🚗')" class="expense-category-btn p-4 rounded-xl theme-transition border-2 border-transparent hover:border-red-300" style="background: var(--bg-secondary);">
+                        <div class="text-3xl mb-2">🚗</div>
+                        <div class="text-sm font-medium" style="color: var(--text-primary)">Delivery</div>
+                        <div class="text-xs" style="color: var(--text-secondary)">Fuel, parking</div>
+                    </button>
+                    
+                    <button onclick="selectExpenseCategory('utilities', '💡')" class="expense-category-btn p-4 rounded-xl theme-transition border-2 border-transparent hover:border-yellow-300" style="background: var(--bg-secondary);">
+                        <div class="text-3xl mb-2">💡</div>
+                        <div class="text-sm font-medium" style="color: var(--text-primary)">Utilities</div>
+                        <div class="text-xs" style="color: var(--text-secondary)">Electricity, Gas</div>
+                    </button>
+                    
+                    <button onclick="selectExpenseCategory('other', '📦')" class="expense-category-btn p-4 rounded-xl theme-transition border-2 border-transparent hover:border-purple-300" style="background: var(--bg-secondary);">
+                        <div class="text-3xl mb-2">📦</div>
+                        <div class="text-sm font-medium" style="color: var(--text-primary)">Other</div>
+                        <div class="text-xs" style="color: var(--text-secondary)">Miscellaneous</div>
+                    </button>
+                </div>
+
+                <!-- Expense Entry Form -->
+                <div id="expense-form" class="hidden">
+                    <div class="rounded-xl p-6 mb-4" style="background: var(--bg-secondary); border: 1px solid var(--border-primary);">
+                        <div class="flex items-center mb-4">
+                            <div class="w-12 h-12 rounded-full flex items-center justify-center mr-4" style="background: var(--bg-primary);" id="selected-category-icon">
+                                <span class="text-2xl">🥬</span>
+                            </div>
+                            <div>
+                                <h3 class="font-semibold text-lg" style="color: var(--text-primary);" id="selected-category-name">Ingredients</h3>
+                                <p class="text-sm" style="color: var(--text-secondary);">Enter amount and description</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Amount Display -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary)">Amount</label>
+                            <div class="text-center p-4 rounded-lg" style="background: var(--bg-primary); border: 2px solid var(--border-primary);">
+                                <span class="text-3xl font-bold" style="color: var(--accent-primary);">
+                                    <?= htmlspecialchars($restaurant['currency']) ?><span id="expense-amount">0.00</span>
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <!-- Calculator Numpad -->
+                        <div class="grid grid-cols-3 gap-3 mb-4">
+                            <button onclick="addExpenseDigit('7')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">7</button>
+                            <button onclick="addExpenseDigit('8')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">8</button>
+                            <button onclick="addExpenseDigit('9')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">9</button>
+                            <button onclick="addExpenseDigit('4')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">4</button>
+                            <button onclick="addExpenseDigit('5')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">5</button>
+                            <button onclick="addExpenseDigit('6')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">6</button>
+                            <button onclick="addExpenseDigit('1')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">1</button>
+                            <button onclick="addExpenseDigit('2')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">2</button>
+                            <button onclick="addExpenseDigit('3')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">3</button>
+                            <button onclick="addExpenseDigit('0')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">0</button>
+                            <button onclick="addExpenseDigit('0'); addExpenseDigit('0')" class="expense-num-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">00</button>
+                            <button onclick="clearExpenseAmount()" class="bg-red-400 hover:bg-red-500 text-white py-3 rounded-lg font-semibold">C</button>
+                        </div>
+                        
+                        <!-- Description -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-2" style="color: var(--text-primary)">Description (Optional)</label>
+                            <input type="text" id="expense-description" placeholder="Brief description..." 
+                                   class="w-full px-3 py-2 rounded-lg border" 
+                                   style="border-color: var(--border-primary); background: var(--bg-primary); color: var(--text-primary);">
+                        </div>
+                        
+                        <!-- Action Buttons -->
+                        <div class="flex space-x-3">
+                            <button onclick="cancelExpenseEntry()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-3 px-4 rounded-lg transition-colors">
+                                Back
+                            </button>
+                            <button onclick="submitExpense()" class="flex-1 bg-green-500 hover:bg-green-600 text-white font-medium py-3 px-4 rounded-lg transition-colors">
+                                Add Expense
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Expenses -->
+                <div class="rounded-xl p-4" style="background: var(--bg-secondary); border: 1px solid var(--border-primary);">
+                    <h3 class="font-semibold mb-3" style="color: var(--text-primary)">Today's Expenses</h3>
+                    <div id="recent-expenses">
+                        <?php if (empty($today_expenses)): ?>
+                            <div class="text-center py-4" style="color: var(--text-secondary);">
+                                <div class="text-2xl mb-2">💰</div>
+                                <p class="text-sm">No expenses recorded today</p>
+                            </div>
+                        <?php else: ?>
+                            <?php 
+                            // Define category icons
+                            $category_icons = [
+                                'ingredients' => '🥬',
+                                'supplies' => '🧹',
+                                'maintenance' => '🔧',
+                                'delivery' => '🚗',
+                                'utilities' => '💡',
+                                'other' => '📦'
+                            ];
+                            
+                            // Show last 5 expenses
+                            $recent_expenses_display = array_slice($today_expenses, 0, 5);
+                            foreach ($recent_expenses_display as $expense): 
+                                $icon = $category_icons[$expense['category']] ?? '💰';
+                                $time = date('g:i A', strtotime($expense['created_at']));
+                            ?>
+                                <div class="flex items-center justify-between p-3 rounded-lg mb-2" style="background: var(--bg-primary); border: 1px solid var(--border-primary);">
+                                    <div class="flex items-center">
+                                        <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3" style="background: var(--bg-secondary);">
+                                            <span class="text-lg"><?= $icon ?></span>
+                                        </div>
+                                        <div>
+                                            <div class="text-sm font-medium" style="color: var(--text-primary);"><?= ucfirst($expense['category']) ?></div>
+                                            <div class="text-xs" style="color: var(--text-secondary);"><?= htmlspecialchars($expense['description'] ?: 'No description') ?> • <?= $time ?></div>
+                                        </div>
+                                    </div>
+                                    <div class="text-right">
+                                        <div class="font-semibold text-red-600"><?= htmlspecialchars($restaurant['currency']) ?><?= number_format($expense['amount'], 2) ?></div>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+
             <!-- Bottom Navigation -->
             <div class="theme-transition px-4 py-2" style="background: var(--bg-secondary); border-top: 1px solid var(--border-primary)">
                 <div class="flex justify-center space-x-6">
-                    <button class="flex flex-col items-center py-1" style="color: var(--accent-primary)">
+                    <button onclick="showMenuSection()" class="flex flex-col items-center py-1" style="color: var(--accent-primary)">
                         <div class="w-5 h-5 mb-1">📋</div>
                         <span class="text-xs font-medium">Orders</span>
                     </button>
@@ -749,7 +1047,7 @@ $category_names = array_keys($categories);
                         <div class="w-5 h-5 mb-1">📊</div>
                         <span class="text-xs font-medium">Reports</span>
                     </button>
-                    <button class="flex flex-col items-center py-1" style="color: var(--text-secondary)" onclick="window.location.href='<?= $_SESSION['role'] === 'admin' ? 'admin.php' : '#' ?>'">
+                    <button onclick="showSettingsModal()" class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
                         <div class="w-5 h-5 mb-1">⚙️</div>
                         <span class="text-xs font-medium">Settings</span>
                     </button>
@@ -757,6 +1055,16 @@ $category_names = array_keys($categories);
                         <div class="w-5 h-5 mb-1">🔔</div>
                         <span class="text-xs font-medium">Alerts</span>
                     </button>
+                    <button onclick="showExpensesSection()" class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
+                        <div class="w-5 h-5 mb-1">💰</div>
+                        <span class="text-xs font-medium">Expenses</span>
+                    </button>
+                    <?php if ($_SESSION['role'] === 'admin'): ?>
+                    <button onclick="window.location.href='admin.php'" class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
+                        <div class="w-5 h-5 mb-1">👑</div>
+                        <span class="text-xs font-medium">Admin</span>
+                    </button>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -814,22 +1122,22 @@ $category_names = array_keys($categories);
 
     <!-- Payment Calculator Modal -->
     <div id="payment-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm mx-auto max-h-[85vh] overflow-y-auto">
+        <div class="rounded-xl shadow-2xl w-full max-w-sm mx-auto max-h-[85vh] overflow-y-auto scrollbar-hide" style="background: var(--bg-primary);">
             <!-- Modal Header -->
             <div class="text-center p-4 border-b border-gray-100">
                 <h3 class="text-base font-semibold text-primary mb-1">Payment</h3>
-                <div id="modal-total" class="text-2xl font-bold text-gray-900"><?= htmlspecialchars($restaurant['currency']) ?>0.00</div>
+                <div id="modal-total" class="text-2xl font-bold" style="color: var(--text-primary);"><?= htmlspecialchars($restaurant['currency']) ?>0.00</div>
             </div>
 
             <!-- Payment Method Selection -->
             <div class="p-4">
                 <div class="mb-3">
                     <div class="flex space-x-2">
-                        <button id="cash-btn" onclick="selectPaymentMethod('cash')" class="flex-1 bg-primary text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center space-x-1 transition-colors">
+                        <button id="cash-btn" onclick="selectPaymentMethod('cash')" class="flex-1 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center space-x-1 transition-colors" style="background: var(--accent-primary); color: white;">
                             <span>💵</span>
                             <span>Cash</span>
                         </button>
-                        <button id="qr-btn" onclick="selectPaymentMethod('qr_code')" class="flex-1 bg-gray-200 text-gray-700 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center space-x-1 transition-colors">
+                        <button id="qr-btn" onclick="selectPaymentMethod('qr_code')" class="flex-1 px-3 py-2 rounded-lg text-sm font-medium flex items-center justify-center space-x-1 transition-colors" style="background: var(--bg-secondary); color: var(--text-secondary);">
                             <span>📱</span>
                             <span>QR Code</span>
                         </button>
@@ -839,34 +1147,34 @@ $category_names = array_keys($categories);
                 <!-- Cash Payment Section -->
                 <div id="cash-section" class="space-y-3">
                     <div>
-                        <input type="text" id="amount-input" class="w-full text-xl font-bold text-center border-2 border-gray-200 rounded-lg py-2 focus:border-primary focus:outline-none" placeholder="0.00" readonly>
+                        <input type="text" id="amount-input" class="w-full text-xl font-bold text-center border-2 rounded-lg py-2 focus:border-primary focus:outline-none" style="border-color: var(--border-primary); background: var(--bg-primary); color: var(--text-primary);" placeholder="0.00" readonly>
                     </div>
 
                     <!-- Number Pad -->
                     <div class="number-pad grid grid-cols-3 gap-2">
-                        <button onclick="addDigit('7')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">7</button>
-                        <button onclick="addDigit('8')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">8</button>
-                        <button onclick="addDigit('9')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">9</button>
+                        <button onclick="addDigit('7')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">7</button>
+                        <button onclick="addDigit('8')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">8</button>
+                        <button onclick="addDigit('9')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">9</button>
                         
-                        <button onclick="addDigit('4')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">4</button>
-                        <button onclick="addDigit('5')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">5</button>
-                        <button onclick="addDigit('6')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">6</button>
+                        <button onclick="addDigit('4')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">4</button>
+                        <button onclick="addDigit('5')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">5</button>
+                        <button onclick="addDigit('6')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">6</button>
                         
-                        <button onclick="addDigit('1')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">1</button>
-                        <button onclick="addDigit('2')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">2</button>
-                        <button onclick="addDigit('3')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">3</button>
+                        <button onclick="addDigit('1')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">1</button>
+                        <button onclick="addDigit('2')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">2</button>
+                        <button onclick="addDigit('3')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">3</button>
                         
-                        <button onclick="addDigit('0')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">0</button>
-                        <button onclick="addDigit('.')" class="number-btn bg-gray-100 hover:bg-gray-200 py-3 rounded-lg font-semibold">.</button>
+                        <button onclick="addDigit('0')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">0</button>
+                        <button onclick="addDigit('0'); addDigit('0')" class="number-btn py-3 rounded-lg font-semibold transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='var(--bg-secondary)'">00</button>
                         <button onclick="clearAmount()" class="bg-red-400 hover:bg-red-500 text-white py-3 rounded-lg font-semibold text-sm">C</button>
                     </div>
 
                     <!-- Quick Amount Buttons -->
                     <div class="flex space-x-1">
-                        <button onclick="setExactAmount()" class="bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded text-xs font-medium">Exact</button>
-                        <button onclick="addQuickAmount(10)" class="bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+10</button>
-                        <button onclick="addQuickAmount(20)" class="bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+20</button>
-                        <button onclick="addQuickAmount(50)" class="bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+50</button>
+                        <button onclick="setExactAmount()" class="flex-1 bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded text-xs font-medium">Exact</button>
+                        <button onclick="addQuickAmount(10)" class="flex-1 bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+10</button>
+                        <button onclick="addQuickAmount(20)" class="flex-1 bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+20</button>
+                        <button onclick="addQuickAmount(50)" class="flex-1 bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+50</button>
                     </div>
 
                     <!-- Change Display -->
@@ -887,37 +1195,119 @@ $category_names = array_keys($categories);
 
                 <!-- QR Code Section -->
                 <div id="qr-section" class="hidden text-center space-y-3">
-                    <div class="border-2 border-dashed border-gray-300 rounded-lg p-6">
+                    <div class="border-2 border-dashed rounded-lg p-6" style="border-color: var(--border-primary);">
                         <div class="w-12 h-12 bg-primary rounded-lg mx-auto mb-3 flex items-center justify-center">
-                            <div class="grid grid-cols-3 gap-1">
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                                <div class="w-1 h-1 bg-white rounded-sm"></div>
-                            </div>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-qr-code-icon lucide-qr-code">
+                                <rect width="5" height="5" x="3" y="3" rx="1"/>
+                                <rect width="5" height="5" x="16" y="3" rx="1"/>
+                                <rect width="5" height="5" x="3" y="16" rx="1"/>
+                                <path d="M21 16h-3a2 2 0 0 0-2 2v3"/>
+                                <path d="M21 21v.01"/>
+                                <path d="M12 7v3a2 2 0 0 1-2 2H7"/>
+                                <path d="M3 12h.01"/>
+                                <path d="M12 3h.01"/>
+                                <path d="M12 16v.01"/>
+                                <path d="M16 12h1"/>
+                                <path d="M21 12v.01"/>
+                                <path d="M12 21v-1"/>
+                            </svg>
                         </div>
                         <div class="text-primary font-medium text-sm">Customer scans QR code</div>
-                        <div id="qr-total" class="text-xs text-gray-600 mt-1">Total: <?= htmlspecialchars($restaurant['currency']) ?>0.00</div>
+                        <div id="qr-total" class="text-xs mt-1" style="color: var(--text-secondary);">Total: <?= htmlspecialchars($restaurant['currency']) ?>0.00</div>
                     </div>
                 </div>
             </div>
 
             <!-- Modal Footer -->
-            <div class="flex space-x-2 p-4 border-t border-gray-100">
+            <div class="flex space-x-2 p-4 border-t" style="border-color: var(--border-primary);">
                 <button onclick="closePaymentModal()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-2 px-3 rounded-lg font-medium text-sm">Cancel</button>
                 <button id="complete-payment-btn" onclick="completePayment()" class="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 px-3 rounded-lg font-medium text-sm">Complete</button>
             </div>
         </div>
     </div>
 
-    <!-- Toast Notification -->
-    <div id="toast" class="fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg transform translate-x-full transition-transform duration-300 z-50">
-        <span id="toast-message"></span>
+    <!-- Clear Order Confirmation Modal -->
+    <div id="clear-order-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 transform transition-all duration-300 scale-95" id="modal-content">
+            <div class="p-6">
+                <!-- Modal Header -->
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mr-4">
+                        <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">Clear Order</h3>
+                        <p class="text-sm text-gray-500">Remove all items from cart</p>
+                    </div>
+                </div>
+                
+                <!-- Modal Body -->
+                <p class="text-gray-700 mb-6">
+                    Clear all items from the current order? You can always add items back afterwards.
+                </p>
+                
+                <!-- Modal Actions -->
+                <div class="flex space-x-3">
+                    <button onclick="cancelClearOrder()" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2.5 px-4 rounded-lg transition-colors">
+                        Cancel
+                    </button>
+                    <button onclick="confirmClearOrder()" class="flex-1 bg-red-500 hover:bg-red-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors">
+                        Clear Order
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white rounded-lg shadow-xl w-80 max-w-sm mx-4 theme-transition" style="background: var(--bg-secondary); border: 1px solid var(--border-primary);">
+            <div class="px-6 py-4 border-b" style="border-color: var(--border-primary);">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-semibold" style="color: var(--text-primary);">Settings</h3>
+                    <button onclick="closeSettingsModal()" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="px-6 py-4">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Theme</label>
+                    <div class="space-y-2">
+                        <button onclick="setTheme('colorful')" class="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-50 flex items-center space-x-3 transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <span class="text-lg">🎨</span>
+                            <span>Colorful</span>
+                        </button>
+                        <button onclick="setTheme('dark')" class="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-50 flex items-center space-x-3 transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <span class="text-lg">🌙</span>
+                            <span>Dark</span>
+                        </button>
+                        <button onclick="setTheme('minimal')" class="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-50 flex items-center space-x-3 transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <span class="text-lg">⚪</span>
+                            <span>Minimal</span>
+                        </button>
+                        <button onclick="setTheme('original')" class="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-50 flex items-center space-x-3 transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <span class="text-lg">⚫</span>
+                            <span>Original</span>
+                        </button>
+                    </div>
+                </div>
+                
+                <?php if ($_SESSION['role'] === 'admin'): ?>
+                <div class="border-t pt-4" style="border-color: var(--border-primary);">
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Admin Options</label>
+                    <button onclick="window.location.href='admin.php'" class="w-full text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-3" style="color: var(--text-primary); background: var(--bg-primary);">
+                        <span class="text-lg">🔧</span>
+                        <span>Admin Panel</span>
+                    </button>
+                </div>
+                <?php endif; ?>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -1075,7 +1465,259 @@ $category_names = array_keys($categories);
             showAllProducts();
         }
 
+        // Show out of stock message
+        function showOutOfStockMessage() {
+            // Create toast notification
+            const toast = document.createElement('div');
+            toast.className = 'fixed top-4 right-4 bg-red-500 text-white px-4 py-3 rounded-lg shadow-lg z-50 flex items-center space-x-2';
+            toast.innerHTML = `
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span>This item is out of stock</span>
+            `;
+            
+            document.body.appendChild(toast);
+            
+            // Remove toast after 3 seconds
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                }
+            }, 3000);
+        }
+
+        function updateAllStockBadges() {
+            // Update all tracked products' stock badges based on current cart
+            document.querySelectorAll('[data-track-stock="1"]').forEach(productCard => {
+                const productId = productCard.dataset.productId;
+                // Get original stock from data attribute (this should remain constant)
+                const originalStock = parseInt(productCard.getAttribute('data-current-stock'));
+                const maxStock = parseInt(productCard.dataset.maxStock);
+                const minStock = parseInt(productCard.dataset.minStock);
+                
+                // Calculate how many items from this product are in cart
+                const cartQuantity = cart[productId] ? cart[productId].quantity : 0;
+                const effectiveStock = Math.max(0, originalStock - cartQuantity);
+                
+                // Update stock badge using multiple selection methods
+                let stockBadge = document.getElementById(`stock-badge-${productId}`);
+                if (!stockBadge) {
+                    stockBadge = productCard.querySelector(`#stock-badge-${productId}`);
+                }
+                if (!stockBadge) {
+                    stockBadge = productCard.querySelector('[id^="stock-badge-"]');
+                }
+                
+                if (stockBadge) {
+                    let badgeColor, badgeText, textColor;
+                    
+                    if (effectiveStock <= 0) {
+                        badgeColor = 'bg-red-500';
+                        badgeText = `0/${maxStock}`;
+                        textColor = 'text-white';
+                        
+                        // Disable the card
+                        productCard.classList.add('opacity-60', 'cursor-not-allowed');
+                        productCard.classList.remove('hover:shadow-lg', 'cursor-pointer', 'hover:scale-105');
+                        productCard.onclick = () => showOutOfStockMessage();
+                        
+                    } else if (effectiveStock <= minStock) {
+                        badgeColor = 'bg-orange-500';
+                        badgeText = `${effectiveStock}/${maxStock}`;
+                        textColor = 'text-white';
+                        
+                        // Re-enable if was disabled
+                        productCard.classList.remove('opacity-60', 'cursor-not-allowed');
+                        productCard.classList.add('hover:shadow-lg', 'cursor-pointer', 'hover:scale-105');
+                        
+                        // Get product details from card elements
+                        const productName = productCard.querySelector('h3').textContent.trim();
+                        const priceText = productCard.querySelector('p').textContent;
+                        const productPrice = parseFloat(priceText.replace(/[^\d.]/g, ''));
+                        productCard.onclick = () => addToCart(productId, productName, productPrice, productCard);
+                        
+                    } else {
+                        badgeColor = 'bg-green-500';
+                        badgeText = `${effectiveStock}/${maxStock}`;
+                        textColor = 'text-white';
+                        
+                        // Re-enable if was disabled
+                        productCard.classList.remove('opacity-60', 'cursor-not-allowed');
+                        productCard.classList.add('hover:shadow-lg', 'cursor-pointer', 'hover:scale-105');
+                        
+                        // Get product details from card elements
+                        const productName = productCard.querySelector('h3').textContent.trim();
+                        const priceText = productCard.querySelector('p').textContent;
+                        const productPrice = parseFloat(priceText.replace(/[^\d.]/g, ''));
+                        productCard.onclick = () => addToCart(productId, productName, productPrice, productCard);
+                    }
+                    
+                    // Update badge colors and text without breaking the DOM structure
+                    stockBadge.classList.remove('bg-red-500', 'bg-orange-500', 'bg-green-500', 'text-white');
+                    stockBadge.classList.add(badgeColor, textColor);
+                    stockBadge.textContent = badgeText;
+                }
+            });
+        }
+
+        function updateSingleProductStockOptimistic(productId, quantityToAdd) {
+            const productCard = document.querySelector(`[data-product-id="${productId}"]`);
+            if (!productCard || productCard.dataset.trackStock !== '1') {
+                return;
+            }
+            
+            const originalStock = parseInt(productCard.getAttribute('data-current-stock'));
+            const maxStock = parseInt(productCard.dataset.maxStock);
+            const minStock = parseInt(productCard.dataset.minStock);
+            // Calculate optimistic cart quantity (current + what we're about to add)
+            const currentCartQuantity = cart[productId] ? cart[productId].quantity : 0;
+            const optimisticCartQuantity = currentCartQuantity + quantityToAdd;
+            const effectiveStock = Math.max(0, originalStock - optimisticCartQuantity);
+            
+            // Try multiple ways to find the badge element
+            let stockBadge = document.getElementById(`stock-badge-${productId}`);
+            if (!stockBadge) {
+                // Fallback: search within the product card
+                stockBadge = productCard.querySelector(`#stock-badge-${productId}`);
+            }
+            if (!stockBadge) {
+                // Fallback: search for any badge in the card
+                stockBadge = productCard.querySelector('[id^="stock-badge-"]');
+            }
+            if (!stockBadge) {
+                // Fallback: try querySelector on the entire document
+                stockBadge = document.querySelector(`#stock-badge-${productId}`);
+            }
+            if (!stockBadge) {
+                // Last resort: search all elements by tag and check ID
+                const allDivs = productCard.getElementsByTagName('div');
+                for (let div of allDivs) {
+                    if (div.id === `stock-badge-${productId}`) {
+                        stockBadge = div;
+                        break;
+                    }
+                }
+            }
+            
+            console.log(`Optimistic update - Product ${productId}: Badge found=${!!stockBadge}, Effective=${effectiveStock}, Current Cart=${currentCartQuantity}, Adding=${quantityToAdd}`);
+            
+            if (stockBadge) {
+                let badgeColor, badgeText, textColor;
+                
+                if (effectiveStock <= 0) {
+                    badgeColor = 'bg-red-500';
+                    badgeText = `0/${maxStock}`;
+                    textColor = 'text-white';
+                } else if (effectiveStock <= minStock) {
+                    badgeColor = 'bg-orange-500';
+                    badgeText = `${effectiveStock}/${maxStock}`;
+                    textColor = 'text-white';
+                } else {
+                    badgeColor = 'bg-green-500';
+                    badgeText = `${effectiveStock}/${maxStock}`;
+                    textColor = 'text-white';
+                }
+                
+                // Update badge colors and text
+                stockBadge.classList.remove('bg-red-500', 'bg-orange-500', 'bg-green-500', 'text-white');
+                stockBadge.classList.add(badgeColor, textColor);
+                stockBadge.textContent = badgeText;
+            }
+        }
+
+        function updateSingleProductStock(productId) {
+            const productCard = document.querySelector(`[data-product-id="${productId}"]`);
+            if (!productCard || productCard.dataset.trackStock !== '1') {
+                return; // Don't update if not tracking stock
+            }
+            
+            const originalStock = parseInt(productCard.getAttribute('data-current-stock'));
+            const maxStock = parseInt(productCard.dataset.maxStock);
+            const minStock = parseInt(productCard.dataset.minStock);
+            const cartQuantity = cart[productId] ? cart[productId].quantity : 0;
+            const effectiveStock = Math.max(0, originalStock - cartQuantity);
+            
+            const stockBadge = document.getElementById(`stock-badge-${productId}`);
+            console.log(`Single update - Product ${productId}: Badge=${!!stockBadge}, Effective=${effectiveStock}`);
+            
+            if (stockBadge) {
+                let badgeColor, badgeText, textColor;
+                
+                if (effectiveStock <= 0) {
+                    badgeColor = 'bg-red-500';
+                    badgeText = `0/${maxStock}`;
+                    textColor = 'text-white';
+                    
+                    // Disable the card
+                    productCard.classList.add('opacity-60', 'cursor-not-allowed');
+                    productCard.classList.remove('hover:shadow-lg', 'cursor-pointer', 'hover:scale-105');
+                    productCard.onclick = () => showOutOfStockMessage();
+                    
+                } else if (effectiveStock <= minStock) {
+                    badgeColor = 'bg-orange-500';
+                    badgeText = `${effectiveStock}/${maxStock}`;
+                    textColor = 'text-white';
+                    
+                    // Re-enable if was disabled
+                    productCard.classList.remove('opacity-60', 'cursor-not-allowed');
+                    productCard.classList.add('hover:shadow-lg', 'cursor-pointer', 'hover:scale-105');
+                    
+                    const productName = productCard.querySelector('h3').textContent.trim();
+                    const priceText = productCard.querySelector('p').textContent;
+                    const productPrice = parseFloat(priceText.replace(/[^\d.]/g, ''));
+                    productCard.onclick = () => addToCart(productId, productName, productPrice, productCard);
+                    
+                } else {
+                    badgeColor = 'bg-green-500';
+                    badgeText = `${effectiveStock}/${maxStock}`;
+                    textColor = 'text-white';
+                    
+                    // Re-enable if was disabled
+                    productCard.classList.remove('opacity-60', 'cursor-not-allowed');
+                    productCard.classList.add('hover:shadow-lg', 'cursor-pointer', 'hover:scale-105');
+                    
+                    const productName = productCard.querySelector('h3').textContent.trim();
+                    const priceText = productCard.querySelector('p').textContent;
+                    const productPrice = parseFloat(priceText.replace(/[^\d.]/g, ''));
+                    productCard.onclick = () => addToCart(productId, productName, productPrice, productCard);
+                }
+                
+                // Update badge colors and text
+                stockBadge.classList.remove('bg-red-500', 'bg-orange-500', 'bg-green-500', 'text-white');
+                stockBadge.classList.add(badgeColor, textColor);
+                stockBadge.textContent = badgeText;
+            }
+        }
+
+        function updateStockDataAfterPayment() {
+            // Update frontend stock data attributes to match the database after payment
+            // The server has reduced stock, so we need to permanently update our data-current-stock values
+            
+            for (const [productId, item] of Object.entries(cart)) {
+                const productCard = document.querySelector(`[data-product-id="${productId}"]`);
+                if (productCard && productCard.dataset.trackStock === '1') {
+                    const originalStock = parseInt(productCard.getAttribute('data-current-stock'));
+                    const newStock = Math.max(0, originalStock - item.quantity);
+                    
+                    // Update the data attribute to the new stock level
+                    productCard.setAttribute('data-current-stock', newStock.toString());
+                    console.log(`Updated product ${productId} stock data: ${originalStock} → ${newStock}`);
+                }
+            }
+        }
+
         function addToCart(productId, productName, productPrice, buttonElement) {
+            // Check if product is out of stock
+            const productCard = document.querySelector(`[data-product-id="${productId}"]`);
+            if (productCard && productCard.dataset.trackStock === '1') {
+                const currentStock = parseInt(productCard.dataset.currentStock);
+                if (currentStock <= 0) {
+                    showOutOfStockMessage();
+                    return;
+                }
+            }
+            
             // Allow spam clicking but prevent too rapid requests
             if (buttonElement.classList.contains('loading')) {
                 return;
@@ -1091,8 +1733,11 @@ $category_names = array_keys($categories);
                 clearTimeout(buttonElement.resetTimeout);
             }
             
-            buttonElement.innerHTML = '<div class="loading-spinner"></div>';
+            // Don't replace entire card content - just add loading state
             buttonElement.classList.add('loading');
+            
+            // Update badge BEFORE server call (optimistic update)
+            updateSingleProductStockOptimistic(productId, 1);
             
             fetch('cashier.php', {
                 method: 'POST',
@@ -1114,10 +1759,13 @@ $category_names = array_keys($categories);
                             quantity: 1
                         };
                     }
+                    
+                    // Update stock badge immediately for this specific product
+                    updateSingleProductStock(productId);
+                    
                     updateCartDisplay();
                     
                     // Success state - but allow immediate re-clicking
-                    buttonElement.innerHTML = '✓ Added!';
                     buttonElement.classList.remove('loading');
                     buttonElement.classList.add('success');
                     
@@ -1126,7 +1774,6 @@ $category_names = array_keys($categories);
                     // Reset to normal after short delay, but don't disable clicking
                     buttonElement.resetTimeout = setTimeout(() => {
                         if (!buttonElement.classList.contains('loading')) {
-                            buttonElement.innerHTML = buttonElement.originalContent;
                             buttonElement.classList.remove('success');
                         }
                         buttonElement.resetTimeout = null;
@@ -1136,7 +1783,6 @@ $category_names = array_keys($categories);
                         clearTimeout(buttonElement.resetTimeout);
                         buttonElement.resetTimeout = null;
                     }
-                    buttonElement.innerHTML = buttonElement.originalContent;
                     buttonElement.classList.remove('loading');
                     showToast(data.message, true);
                 }
@@ -1146,7 +1792,6 @@ $category_names = array_keys($categories);
                     clearTimeout(buttonElement.resetTimeout);
                     buttonElement.resetTimeout = null;
                 }
-                buttonElement.innerHTML = buttonElement.originalContent;
                 buttonElement.classList.remove('loading');
                 showToast('Error adding item', true);
             });
@@ -1195,6 +1840,28 @@ $category_names = array_keys($categories);
                 return;
             }
             
+            // Check stock availability for products that track stock
+            const productCard = document.querySelector(`[data-product-id="${productId}"]`);
+            if (productCard && productCard.dataset.trackStock === '1') {
+                const originalStock = parseInt(productCard.getAttribute('data-current-stock'));
+                const currentCartQuantity = cart[productId] ? cart[productId].quantity : 0;
+                const quantityIncrease = quantity - currentCartQuantity;
+                
+                // Only check if we're trying to increase quantity
+                if (quantityIncrease > 0) {
+                    const availableStock = Math.max(0, originalStock - currentCartQuantity);
+                    
+                    if (quantityIncrease > availableStock) {
+                        if (availableStock === 0) {
+                            showToast('Cannot increase - item is out of stock', true);
+                        } else {
+                            showToast(`Only ${availableStock} more available in stock`, true);
+                        }
+                        return;
+                    }
+                }
+            }
+            
             fetch('cashier.php', {
                 method: 'POST',
                 headers: {
@@ -1234,6 +1901,23 @@ $category_names = array_keys($categories);
                 const isNewItem = !existingItem;
                 const slideClass = isNewItem ? 'slide-in' : '';
                 
+                // Check stock availability for + button
+                const productCard = document.querySelector(`[data-product-id="${id}"]`);
+                let plusButtonDisabled = false;
+                let plusButtonStyle = "background: var(--bg-primary); border: 1px solid var(--border-primary); color: var(--text-primary);";
+                let plusButtonOnclick = `updateQuantity(${id}, ${quantity + 1})`;
+                
+                if (productCard && productCard.dataset.trackStock === '1') {
+                    const originalStock = parseInt(productCard.getAttribute('data-current-stock'));
+                    const availableStock = Math.max(0, originalStock - quantity);
+                    
+                    if (availableStock <= 0) {
+                        plusButtonDisabled = true;
+                        plusButtonStyle = "background: var(--bg-secondary); border: 1px solid var(--border-primary); color: var(--text-secondary); opacity: 0.5; cursor: not-allowed;";
+                        plusButtonOnclick = `showToast('No more stock available', true)`;
+                    }
+                }
+                
                 html += `
                     <div class="cart-item theme-cart-item rounded-lg p-2 mb-2 ${slideClass}" style="background: var(--bg-secondary);" data-item-id="${id}">
                         <div class="flex justify-between items-center">
@@ -1244,7 +1928,7 @@ $category_names = array_keys($categories);
                             <div class="flex items-center space-x-1 ml-2 cart-item-controls">
                                 <button onclick="updateQuantity(${id}, ${quantity - 1})" class="w-6 h-6 theme-cart-btn rounded flex items-center justify-center text-sm" style="background: var(--bg-primary); border: 1px solid var(--border-primary); color: var(--text-primary);">-</button>
                                 <span class="text-sm font-medium w-6 text-center" style="color: var(--text-primary);">${quantity}</span>
-                                <button onclick="updateQuantity(${id}, ${quantity + 1})" class="w-6 h-6 theme-cart-btn rounded flex items-center justify-center text-sm" style="background: var(--bg-primary); border: 1px solid var(--border-primary); color: var(--text-primary);">+</button>
+                                <button onclick="${plusButtonOnclick}" class="w-6 h-6 theme-cart-btn rounded flex items-center justify-center text-sm" style="${plusButtonStyle}">+</button>
                                 <button onclick="removeFromCart(${id})" class="w-6 h-6 hover:text-red-400 flex items-center justify-center ml-1" style="color: var(--text-secondary);">×</button>
                             </div>
                         </div>
@@ -1285,6 +1969,9 @@ $category_names = array_keys($categories);
             cartCount.textContent = itemCount;
             checkoutBtn.disabled = Object.keys(cart).length === 0;
             checkoutText.textContent = `Charge ${formatCurrency(total)}`;
+            
+            // Update stock badges based on current cart
+            updateAllStockBadges();
         }
 
         function checkout() {
@@ -1331,18 +2018,26 @@ $category_names = array_keys($categories);
             const qrSection = document.getElementById('qr-section');
             
             if (method === 'cash') {
-                cashBtn.classList.remove('bg-gray-200', 'text-gray-700');
-                cashBtn.classList.add('bg-primary', 'text-white');
-                qrBtn.classList.remove('bg-primary', 'text-white');
-                qrBtn.classList.add('bg-gray-200', 'text-gray-700');
+                // Remove class-based styling and use CSS variables
+                cashBtn.classList.remove('bg-gray-200', 'text-gray-700', 'bg-primary', 'text-white');
+                cashBtn.style.background = 'var(--accent-primary)';
+                cashBtn.style.color = 'white';
+                
+                qrBtn.classList.remove('bg-primary', 'text-white', 'bg-gray-200', 'text-gray-700');
+                qrBtn.style.background = 'var(--bg-secondary)';
+                qrBtn.style.color = 'var(--text-secondary)';
                 
                 cashSection.classList.remove('hidden');
                 qrSection.classList.add('hidden');
             } else if (method === 'qr_code') {
-                qrBtn.classList.remove('bg-gray-200', 'text-gray-700');
-                qrBtn.classList.add('bg-primary', 'text-white');
-                cashBtn.classList.remove('bg-primary', 'text-white');
-                cashBtn.classList.add('bg-gray-200', 'text-gray-700');
+                // Remove class-based styling and use CSS variables
+                qrBtn.classList.remove('bg-gray-200', 'text-gray-700', 'bg-primary', 'text-white');
+                qrBtn.style.background = 'var(--accent-primary)';
+                qrBtn.style.color = 'white';
+                
+                cashBtn.classList.remove('bg-primary', 'text-white', 'bg-gray-200', 'text-gray-700');
+                cashBtn.style.background = 'var(--bg-secondary)';
+                cashBtn.style.color = 'var(--text-secondary)';
                 
                 qrSection.classList.remove('hidden');
                 cashSection.classList.add('hidden');
@@ -1352,8 +2047,10 @@ $category_names = array_keys($categories);
         }
 
         function addDigit(digit) {
-            if (digit === '.' && amountTendered.includes('.')) return;
-            if (digit === '.' && amountTendered === '') amountTendered = '0';
+            // Malaysian banking app approach - no decimal input needed
+            // Always work in cents/sen, auto-format to ringgit display
+            
+            if (amountTendered.length >= 8) return; // Limit to reasonable amount (999999.99)
             
             amountTendered += digit;
             updateAmountDisplay();
@@ -1365,14 +2062,17 @@ $category_names = array_keys($categories);
         }
 
         function setExactAmount() {
-            // Ensure same precision as backend calculation
-            amountTendered = (Math.round(currentTotal * 100) / 100).toFixed(2);
+            // Set exact amount in dollars (not cents)
+            const exactAmount = Math.round(currentTotal * 100) / 100;
+            amountTendered = Math.round(exactAmount * 100).toString(); // Still store as cents for internal calculation
             updateAmountDisplay();
         }
 
         function addQuickAmount(amount) {
-            const newAmount = currentTotal + amount;
-            amountTendered = newAmount.toFixed(2);
+            // Add to current amount (additive behavior)
+            const currentCents = parseInt(amountTendered || '0');
+            const newCents = currentCents + Math.round(amount * 100);
+            amountTendered = newCents.toString();
             updateAmountDisplay();
         }
 
@@ -1382,10 +2082,21 @@ $category_names = array_keys($categories);
             const changeAmount = document.getElementById('change-amount');
             const insufficientWarning = document.getElementById('insufficient-warning');
             
-            if (amountInput) amountInput.value = amountTendered;
+            // Malaysian banking app approach - convert digits to currency with commas
+            let displayAmount = '0.00';
+            if (amountTendered && amountTendered !== '') {
+                // Convert string of digits to proper currency format
+                const cents = parseInt(amountTendered);
+                const ringgit = cents / 100;
+                displayAmount = formatMalaysianCurrency(ringgit);
+            }
             
-            if (amountTendered && !isNaN(parseFloat(amountTendered))) {
-                const tendered = parseFloat(amountTendered);
+            if (amountInput) amountInput.value = displayAmount;
+            
+            if (amountTendered && amountTendered !== '') {
+                // Parse from original digits, not formatted display
+                const cents = parseInt(amountTendered);
+                const tendered = cents / 100;
                 // Use same precision as backend calculation
                 const tenderedRounded = Math.round(tendered * 100) / 100;
                 const totalRounded = Math.round(currentTotal * 100) / 100;
@@ -1439,7 +2150,8 @@ $category_names = array_keys($categories);
             };
             
             if (currentPaymentMethod === 'cash') {
-                const tendered = parseFloat(amountTendered || 0);
+                // Convert amountTendered from cents string back to dollars
+                const tendered = parseFloat(amountTendered || 0) / 100;
                 
                 // Check if no amount was entered
                 if (!amountTendered || tendered === 0) {
@@ -1488,6 +2200,9 @@ $category_names = array_keys($categories);
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
+                    // Update frontend stock data to match database after successful payment
+                    updateStockDataAfterPayment();
+                    
                     cart = {};
                     updateCartDisplay();
                     closePaymentModal();
@@ -1527,30 +2242,256 @@ $category_names = array_keys($categories);
         }
 
         function clearCart() {
-            if (Object.keys(cart).length > 0 && confirm('Clear all items from order?')) {
-                // Send AJAX request to clear server-side cart
-                fetch('cashier.php', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                    body: 'action=clear_cart&csrf_token=<?= Security::generateCSRFToken() ?>'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        cart = {};
-                        updateCartDisplay();
-                        showToast('Order cleared');
-                    } else {
-                        console.log('Clear cart failed:', data);
-                        showToast('Failed to clear cart: ' + (data.message || 'Unknown error'), true);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error clearing cart:', error);
-                    showToast('Error clearing cart', true);
-                });
+            if (Object.keys(cart).length > 0) {
+                showClearOrderModal();
+            }
+        }
+        
+        // Clear Order Modal Functions
+        function showClearOrderModal() {
+            const modal = document.getElementById('clear-order-modal');
+            const modalContent = document.getElementById('modal-content');
+            
+            modal.classList.remove('hidden');
+            // Trigger animation
+            setTimeout(() => {
+                modalContent.classList.remove('scale-95');
+                modalContent.classList.add('scale-100');
+            }, 10);
+        }
+        
+        function cancelClearOrder() {
+            const modal = document.getElementById('clear-order-modal');
+            const modalContent = document.getElementById('modal-content');
+            
+            modalContent.classList.remove('scale-100');
+            modalContent.classList.add('scale-95');
+            
+            setTimeout(() => {
+                modal.classList.add('hidden');
+            }, 200);
+        }
+        
+        function confirmClearOrder() {
+            // Hide modal first
+            cancelClearOrder();
+            
+            // Send AJAX request to clear server-side cart
+            fetch('cashier.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'action=clear_cart&csrf_token=<?= Security::generateCSRFToken() ?>'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    cart = {};
+                    updateCartDisplay();
+                    showToast('Order cleared');
+                } else {
+                    console.log('Clear cart failed:', data);
+                    showToast('Failed to clear cart: ' + (data.message || 'Unknown error'), true);
+                }
+            })
+            .catch(error => {
+                console.error('Error clearing cart:', error);
+                showToast('Error clearing cart', true);
+            });
+        }
+
+        // Currency formatting function - Malaysian style with commas
+        function formatMalaysianCurrency(amount) {
+            return parseFloat(amount).toLocaleString('en-MY', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        }
+
+        // Expense Management Functions
+        let currentExpenseAmount = '';
+        let selectedExpenseCategory = '';
+        let selectedExpenseCategoryIcon = '';
+        let todayExpensesTotal = <?= $today_expenses_total ?>;
+
+        function showExpensesSection() {
+            // Hide menu section
+            const menuSection = document.querySelector('.product-grid').closest('.flex-1');
+            const expensesSection = document.getElementById('expenses-section');
+            
+            menuSection.classList.add('hidden');
+            expensesSection.classList.remove('hidden');
+            
+            // Update navigation active state
+            updateNavigationState('expenses');
+        }
+
+        function showMenuSection() {
+            // Show menu section
+            const menuSection = document.querySelector('.product-grid').closest('.flex-1');
+            const expensesSection = document.getElementById('expenses-section');
+            
+            expensesSection.classList.add('hidden');
+            menuSection.classList.remove('hidden');
+            
+            // Update navigation active state
+            updateNavigationState('menu');
+        }
+
+        function updateNavigationState(activeSection) {
+            const buttons = document.querySelectorAll('.flex.justify-center button');
+            buttons.forEach(btn => {
+                btn.style.color = 'var(--text-secondary)';
+            });
+            
+            if (activeSection === 'expenses') {
+                buttons[3].style.color = 'var(--accent-primary)'; // Expenses button
+            } else {
+                buttons[0].style.color = 'var(--accent-primary)'; // Orders/Menu button
+            }
+        }
+
+        function selectExpenseCategory(category, icon) {
+            selectedExpenseCategory = category;
+            selectedExpenseCategoryIcon = icon;
+            
+            // Update form header
+            const iconElement = document.getElementById('selected-category-icon').querySelector('span');
+            const nameElement = document.getElementById('selected-category-name');
+            
+            iconElement.textContent = icon;
+            nameElement.textContent = category.charAt(0).toUpperCase() + category.slice(1);
+            
+            // Show form
+            document.getElementById('expense-form').classList.remove('hidden');
+            
+            // Reset amount
+            currentExpenseAmount = '';
+            document.getElementById('expense-amount').textContent = '0.00';
+            document.getElementById('expense-description').value = '';
+            
+            // Scroll to form
+            document.getElementById('expense-form').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function addExpenseDigit(digit) {
+            // Malaysian banking app approach for expenses
+            if (currentExpenseAmount.length >= 8) return; // Limit to reasonable amount
+            
+            currentExpenseAmount += digit;
+            
+            // Convert to currency display with comma formatting
+            const cents = parseInt(currentExpenseAmount || '0');
+            const ringgit = cents / 100;
+            document.getElementById('expense-amount').textContent = formatMalaysianCurrency(ringgit);
+        }
+
+        function clearExpenseAmount() {
+            currentExpenseAmount = '';
+            document.getElementById('expense-amount').textContent = formatMalaysianCurrency(0);
+        }
+
+        function cancelExpenseEntry() {
+            document.getElementById('expense-form').classList.add('hidden');
+            document.getElementById('expense-description').value = '';
+            currentExpenseAmount = '';
+        }
+
+        function submitExpense() {
+            // Convert cents to ringgit for submission
+            const cents = parseInt(currentExpenseAmount || '0');
+            const amount = cents / 100;
+            const description = document.getElementById('expense-description').value;
+            
+            if (amount <= 0) {
+                showToast('Please enter a valid amount', true);
+                return;
+            }
+            
+            // Create expense data
+            const expenseData = {
+                action: 'add_expense',
+                category: selectedExpenseCategory,
+                amount: amount,
+                description: description,
+                csrf_token: csrfToken
+            };
+            
+            // Submit expense
+            fetch('cashier.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: Object.keys(expenseData).map(key => key + '=' + encodeURIComponent(expenseData[key])).join('&')
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showToast(`Expense added: ${restaurantConfig.currency}${amount.toFixed(2)}`);
+                    
+                    // Update today's total
+                    todayExpensesTotal += amount;
+                    document.getElementById('today-expenses-total').textContent = todayExpensesTotal.toFixed(2);
+                    
+                    // Add to recent expenses list
+                    addRecentExpenseToList({
+                        category: selectedExpenseCategory,
+                        icon: selectedExpenseCategoryIcon,
+                        amount: amount,
+                        description: description,
+                        time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+                    });
+                    
+                    // Reset form
+                    cancelExpenseEntry();
+                } else {
+                    showToast('Failed to add expense: ' + (data.message || 'Unknown error'), true);
+                }
+            })
+            .catch(error => {
+                showToast('Error adding expense', true);
+                console.error('Error:', error);
+            });
+        }
+
+        function addRecentExpenseToList(expense) {
+            const recentExpenses = document.getElementById('recent-expenses');
+            
+            // Remove "no expenses" message if it exists
+            const noExpensesMsg = recentExpenses.querySelector('.text-center');
+            if (noExpensesMsg) {
+                noExpensesMsg.remove();
+            }
+            
+            // Create expense item
+            const expenseItem = document.createElement('div');
+            expenseItem.className = 'flex items-center justify-between p-3 rounded-lg mb-2';
+            expenseItem.style = 'background: var(--bg-primary); border: 1px solid var(--border-primary);';
+            
+            expenseItem.innerHTML = `
+                <div class="flex items-center">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center mr-3" style="background: var(--bg-secondary);">
+                        <span class="text-lg">${expense.icon}</span>
+                    </div>
+                    <div>
+                        <div class="text-sm font-medium" style="color: var(--text-primary);">${expense.category.charAt(0).toUpperCase() + expense.category.slice(1)}</div>
+                        <div class="text-xs" style="color: var(--text-secondary);">${expense.description || 'No description'} • ${expense.time}</div>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <div class="font-semibold text-red-600">${restaurantConfig.currency}${expense.amount.toFixed(2)}</div>
+                </div>
+            `;
+            
+            // Add to top of list
+            recentExpenses.insertBefore(expenseItem, recentExpenses.firstChild);
+            
+            // Limit to 5 recent expenses
+            const items = recentExpenses.children;
+            if (items.length > 5) {
+                recentExpenses.removeChild(items[items.length - 1]);
             }
         }
 
@@ -1583,7 +2524,8 @@ $category_names = array_keys($categories);
         
         function updateProductCardTheme(theme) {
             const productCards = document.querySelectorAll('.product-card');
-            const categoryTabs = document.querySelectorAll('.tab-btn');
+            // Only target category tabs, not payment method buttons in modal
+            const categoryTabs = document.querySelectorAll('#category-tabs-container .tab-btn');
             
             productCards.forEach(card => {
                 const cardHeader = card.querySelector('.theme-card-header');
@@ -1737,8 +2679,23 @@ $category_names = array_keys($categories);
                 dropdown.classList.toggle('hidden');
             }
         }
+
+        function showSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) {
+                modal.classList.remove('hidden');
+            }
+        }
+
+        function closeSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+        }
         
         // Initialize
+
         document.addEventListener('DOMContentLoaded', function() {
             updateCartDisplay();
             setActiveTab(document.querySelector('.tab-btn.active'));
@@ -1748,20 +2705,16 @@ $category_names = array_keys($categories);
                 setTheme(currentTheme);
                 // Show all products and apply theme styling
                 showAllProducts();
+                // Initialize stock badges to ensure they work from first click
+                updateAllStockBadges();
             }, 100);
             
-            // Theme toggle button
-            const themeToggle = document.getElementById('theme-toggle');
-            if (themeToggle) {
-                themeToggle.addEventListener('click', toggleThemeDropdown);
-            }
-            
-            // Close dropdown when clicking outside
+            // Close settings modal when clicking outside
             document.addEventListener('click', function(e) {
-                const dropdown = document.getElementById('theme-dropdown');
-                const toggle = document.getElementById('theme-toggle');
-                if (dropdown && !dropdown.contains(e.target) && !toggle.contains(e.target)) {
-                    dropdown.classList.add('hidden');
+                const modal = document.getElementById('settings-modal');
+                
+                if (modal && !modal.classList.contains('hidden') && e.target === modal) {
+                    modal.classList.add('hidden');
                 }
             });
             
@@ -1774,6 +2727,27 @@ $category_names = array_keys($categories);
                     }
                 });
             }
+            
+            // Clear Order Modal event listeners
+            const clearOrderModal = document.getElementById('clear-order-modal');
+            if (clearOrderModal) {
+                // Close modal when clicking outside
+                clearOrderModal.addEventListener('click', function(e) {
+                    if (e.target === this) {
+                        cancelClearOrder();
+                    }
+                });
+            }
+            
+            // Close modal on Escape key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    const modal = document.getElementById('clear-order-modal');
+                    if (modal && !modal.classList.contains('hidden')) {
+                        cancelClearOrder();
+                    }
+                }
+            });
         });
 
         // Backup initialization on window load to ensure proper card styling

@@ -154,32 +154,84 @@ if ($_POST && isset($_POST['action'])) {
             $name = Security::sanitize($_POST['name']);
             $price = (float)$_POST['price'];
             $category = Security::sanitize($_POST['category']);
+            $description = Security::sanitize($_POST['description'] ?? '');
+            $is_active = (int)($_POST['is_active'] ?? 1);
             
             if ($name && $price > 0 && $category) {
-                // Check for duplicate product within the restaurant
-                $check_query = "SELECT COUNT(*) as count FROM products WHERE restaurant_id = :restaurant_id AND name = :name AND price = :price AND category = :category";
-                $check_stmt = $db->prepare($check_query);
-                $check_stmt->bindParam(':restaurant_id', $restaurant_id);
-                $check_stmt->bindParam(':name', $name);
-                $check_stmt->bindParam(':price', $price);
-                $check_stmt->bindParam(':category', $category);
-                $check_stmt->execute();
-                $duplicate = $check_stmt->fetch(PDO::FETCH_ASSOC);
-                
-                if ($duplicate['count'] > 0) {
-                    $error = 'Product with the same name, price, and category already exists';
-                } else {
-                    $query = "INSERT INTO products (restaurant_id, name, price, category) VALUES (:restaurant_id, :name, :price, :category)";
-                    $stmt = $db->prepare($query);
-                    $stmt->bindParam(':restaurant_id', $restaurant_id);
-                    $stmt->bindParam(':name', $name);
-                    $stmt->bindParam(':price', $price);
-                    $stmt->bindParam(':category', $category);
+                // Handle image upload
+                $image_path = null;
+                if (isset($_FILES['product_image']) && $_FILES['product_image']['error'] === UPLOAD_ERR_OK) {
+                    $upload_dir = __DIR__ . '/uploads/products/';
                     
-                    if ($stmt->execute()) {
-                        $success = 'Product added successfully';
+                    // Validate file
+                    $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+                    $file_info = getimagesize($_FILES['product_image']['tmp_name']);
+                    $file_type = $file_info['mime'] ?? '';
+                    
+                    if (in_array($file_type, $allowed_types) && $_FILES['product_image']['size'] <= 2 * 1024 * 1024) { // 2MB limit
+                        // Generate unique filename
+                        $extension = pathinfo($_FILES['product_image']['name'], PATHINFO_EXTENSION);
+                        $filename = 'product_' . time() . '_' . rand(1000, 9999) . '.' . $extension;
+                        $full_path = $upload_dir . $filename;
+                        
+                        if (move_uploaded_file($_FILES['product_image']['tmp_name'], $full_path)) {
+                            $image_path = 'uploads/products/' . $filename;
+                        } else {
+                            $error = 'Failed to upload image';
+                        }
                     } else {
-                        $error = 'Failed to add product';
+                        $error = 'Invalid image file. Please use JPG, PNG, GIF, or WEBP under 2MB.';
+                    }
+                }
+                
+                if (!isset($error)) {
+                    // Check for duplicate product within the restaurant
+                    $check_query = "SELECT COUNT(*) as count FROM products WHERE restaurant_id = :restaurant_id AND name = :name AND category = :category";
+                    $check_stmt = $db->prepare($check_query);
+                    $check_stmt->bindParam(':restaurant_id', $restaurant_id);
+                    $check_stmt->bindParam(':name', $name);
+                    $check_stmt->bindParam(':category', $category);
+                    $check_stmt->execute();
+                    $duplicate = $check_stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($duplicate['count'] > 0) {
+                        $error = 'Product with the same name and category already exists';
+                        // Clean up uploaded file if duplicate
+                        if ($image_path && file_exists(__DIR__ . '/' . $image_path)) {
+                            unlink(__DIR__ . '/' . $image_path);
+                        }
+                    } else {
+                        // Handle stock management fields
+                        $track_stock = isset($_POST['track_stock']) ? 1 : 0;
+                        $stock_quantity = $track_stock ? (float)($_POST['stock_quantity'] ?? 0) : 0;
+                        $min_stock_level = $track_stock ? (float)($_POST['min_stock_level'] ?? 5) : 5;
+                        $max_stock_level = $track_stock ? (float)($_POST['max_stock_level'] ?? 100) : 100;
+                        $stock_unit = $track_stock ? Security::sanitize($_POST['stock_unit'] ?? 'pieces') : 'pieces';
+                        
+                        $query = "INSERT INTO products (restaurant_id, name, price, category, description, image, is_active, track_stock, stock_quantity, min_stock_level, max_stock_level, stock_unit) VALUES (:restaurant_id, :name, :price, :category, :description, :image, :is_active, :track_stock, :stock_quantity, :min_stock_level, :max_stock_level, :stock_unit)";
+                        $stmt = $db->prepare($query);
+                        $stmt->bindParam(':restaurant_id', $restaurant_id);
+                        $stmt->bindParam(':name', $name);
+                        $stmt->bindParam(':price', $price);
+                        $stmt->bindParam(':category', $category);
+                        $stmt->bindParam(':description', $description);
+                        $stmt->bindParam(':image', $image_path);
+                        $stmt->bindParam(':is_active', $is_active);
+                        $stmt->bindParam(':track_stock', $track_stock);
+                        $stmt->bindParam(':stock_quantity', $stock_quantity);
+                        $stmt->bindParam(':min_stock_level', $min_stock_level);
+                        $stmt->bindParam(':max_stock_level', $max_stock_level);
+                        $stmt->bindParam(':stock_unit', $stock_unit);
+                        
+                        if ($stmt->execute()) {
+                            $success = 'Product added successfully' . ($image_path ? ' with image' : '');
+                        } else {
+                            $error = 'Failed to add product';
+                            // Clean up uploaded file if database insert failed
+                            if ($image_path && file_exists(__DIR__ . '/' . $image_path)) {
+                                unlink(__DIR__ . '/' . $image_path);
+                            }
+                        }
                     }
                 }
             } else {
@@ -197,6 +249,47 @@ if ($_POST && isset($_POST['action'])) {
             $stmt->bindParam(':id', $product_id);
             $stmt->bindParam(':restaurant_id', $restaurant_id);
             $stmt->execute();
+        }
+        
+        if ($_POST['action'] === 'remove_product_image') {
+            header('Content-Type: application/json');
+            
+            $product_id = (int)$_POST['product_id'];
+            
+            try {
+                // Get current product image
+                $query = "SELECT image FROM products WHERE id = :id AND restaurant_id = :restaurant_id";
+                $stmt = $db->prepare($query);
+                $stmt->bindParam(':id', $product_id);
+                $stmt->bindParam(':restaurant_id', $restaurant_id);
+                $stmt->execute();
+                $product = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($product && $product['image']) {
+                    // Delete the image file
+                    $image_path = __DIR__ . '/' . $product['image'];
+                    if (file_exists($image_path)) {
+                        unlink($image_path);
+                    }
+                    
+                    // Clear image from database
+                    $query = "UPDATE products SET image = NULL WHERE id = :id AND restaurant_id = :restaurant_id";
+                    $stmt = $db->prepare($query);
+                    $stmt->bindParam(':id', $product_id);
+                    $stmt->bindParam(':restaurant_id', $restaurant_id);
+                    
+                    if ($stmt->execute()) {
+                        echo json_encode(['success' => true, 'message' => 'Image removed successfully']);
+                    } else {
+                        echo json_encode(['success' => false, 'error' => 'Failed to update database']);
+                    }
+                } else {
+                    echo json_encode(['success' => false, 'error' => 'Product or image not found']);
+                }
+            } catch (Exception $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            exit();
         }
         
         if ($_POST['action'] === 'edit_product') {
@@ -220,18 +313,73 @@ if ($_POST && isset($_POST['action'])) {
                 if ($duplicate['count'] > 0) {
                     $error = 'Another product with the same name, price, and category already exists';
                 } else {
-                    $query = "UPDATE products SET name = :name, price = :price, category = :category WHERE id = :id AND restaurant_id = :restaurant_id";
-                    $stmt = $db->prepare($query);
-                    $stmt->bindParam(':name', $name);
-                    $stmt->bindParam(':price', $price);
-                    $stmt->bindParam(':category', $category);
-                    $stmt->bindParam(':id', $product_id);
-                    $stmt->bindParam(':restaurant_id', $restaurant_id);
+                    // Get current product image
+                    $current_query = "SELECT image FROM products WHERE id = :id AND restaurant_id = :restaurant_id";
+                    $current_stmt = $db->prepare($current_query);
+                    $current_stmt->bindParam(':id', $product_id);
+                    $current_stmt->bindParam(':restaurant_id', $restaurant_id);
+                    $current_stmt->execute();
+                    $current_product = $current_stmt->fetch(PDO::FETCH_ASSOC);
                     
-                    if ($stmt->execute()) {
-                        $success = 'Product updated successfully';
-                    } else {
-                        $error = 'Failed to update product';
+                    $image_path = $current_product['image']; // Keep existing image by default
+                    $description = Security::sanitize($_POST['description'] ?? '');
+                    
+                    // Handle image upload
+                    if (isset($_FILES['product_image']) && $_FILES['product_image']['error'] === UPLOAD_ERR_OK) {
+                        $upload_dir = __DIR__ . '/uploads/products/';
+                        $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+                        $max_size = 2 * 1024 * 1024; // 2MB
+                        
+                        $file_type = mime_content_type($_FILES['product_image']['tmp_name']);
+                        $file_size = $_FILES['product_image']['size'];
+                        
+                        if (in_array($file_type, $allowed_types) && $file_size <= $max_size) {
+                            $extension = pathinfo($_FILES['product_image']['name'], PATHINFO_EXTENSION);
+                            $filename = 'product_' . $product_id . '_' . time() . '.' . $extension;
+                            $upload_path = $upload_dir . $filename;
+                            
+                            if (move_uploaded_file($_FILES['product_image']['tmp_name'], $upload_path)) {
+                                // Delete old image if it exists
+                                if ($current_product['image'] && file_exists(__DIR__ . '/' . $current_product['image'])) {
+                                    unlink(__DIR__ . '/' . $current_product['image']);
+                                }
+                                $image_path = 'uploads/products/' . $filename;
+                            } else {
+                                $error = 'Failed to upload image';
+                            }
+                        } else {
+                            $error = 'Invalid image file. Please use JPG, PNG, GIF, or WebP under 2MB';
+                        }
+                    }
+                    
+                    if (!isset($error)) {
+                        // Handle stock management fields
+                        $track_stock = isset($_POST['track_stock']) ? 1 : 0;
+                        $stock_quantity = $track_stock ? (float)($_POST['stock_quantity'] ?? 0) : 0;
+                        $min_stock_level = $track_stock ? (float)($_POST['min_stock_level'] ?? 5) : 5;
+                        $max_stock_level = $track_stock ? (float)($_POST['max_stock_level'] ?? 100) : 100;
+                        $stock_unit = $track_stock ? Security::sanitize($_POST['stock_unit'] ?? 'pieces') : 'pieces';
+                        
+                        $query = "UPDATE products SET name = :name, price = :price, category = :category, description = :description, image = :image, track_stock = :track_stock, stock_quantity = :stock_quantity, min_stock_level = :min_stock_level, max_stock_level = :max_stock_level, stock_unit = :stock_unit WHERE id = :id AND restaurant_id = :restaurant_id";
+                        $stmt = $db->prepare($query);
+                        $stmt->bindParam(':name', $name);
+                        $stmt->bindParam(':price', $price);
+                        $stmt->bindParam(':category', $category);
+                        $stmt->bindParam(':description', $description);
+                        $stmt->bindParam(':image', $image_path);
+                        $stmt->bindParam(':track_stock', $track_stock);
+                        $stmt->bindParam(':stock_quantity', $stock_quantity);
+                        $stmt->bindParam(':min_stock_level', $min_stock_level);
+                        $stmt->bindParam(':max_stock_level', $max_stock_level);
+                        $stmt->bindParam(':stock_unit', $stock_unit);
+                        $stmt->bindParam(':id', $product_id);
+                        $stmt->bindParam(':restaurant_id', $restaurant_id);
+                        
+                        if ($stmt->execute()) {
+                            $success = 'Product updated successfully';
+                        } else {
+                            $error = 'Failed to update product';
+                        }
                     }
                 }
             } else {
@@ -244,7 +392,13 @@ if ($_POST && isset($_POST['action'])) {
             $name = Security::sanitize($_POST['category_name']);
             $description = Security::sanitize($_POST['category_description']);
             $icon = Security::sanitize($_POST['category_icon']);
+            $color = Security::sanitize($_POST['category_color'] ?? '#FF6B6B');
             $sort_order = (int)$_POST['sort_order'];
+            
+            // Validate color format (hex color)
+            if (!preg_match('/^#[0-9A-F]{6}$/i', $color)) {
+                $color = '#FF6B6B'; // Default color if invalid
+            }
             
             if ($name) {
                 // Check for duplicate category
@@ -258,12 +412,13 @@ if ($_POST && isset($_POST['action'])) {
                 if ($duplicate['count'] > 0) {
                     $error = 'Category already exists';
                 } else {
-                    $query = "INSERT INTO categories (restaurant_id, name, description, icon, sort_order) VALUES (:restaurant_id, :name, :description, :icon, :sort_order)";
+                    $query = "INSERT INTO categories (restaurant_id, name, description, icon, color, sort_order) VALUES (:restaurant_id, :name, :description, :icon, :color, :sort_order)";
                     $stmt = $db->prepare($query);
                     $stmt->bindParam(':restaurant_id', $restaurant_id);
                     $stmt->bindParam(':name', $name);
                     $stmt->bindParam(':description', $description);
                     $stmt->bindParam(':icon', $icon);
+                    $stmt->bindParam(':color', $color);
                     $stmt->bindParam(':sort_order', $sort_order);
                     
                     if ($stmt->execute()) {
@@ -292,22 +447,29 @@ if ($_POST && isset($_POST['action'])) {
             $name = Security::sanitize($_POST['category_name']);
             $description = Security::sanitize($_POST['category_description']);
             $icon = Security::sanitize($_POST['category_icon']);
+            $color = Security::sanitize($_POST['category_color'] ?? '#FF6B6B');
             $sort_order = (int)$_POST['sort_order'];
+            
+            // Validate color format (hex color)
+            if (!preg_match('/^#[0-9A-F]{6}$/i', $color)) {
+                $color = '#FF6B6B'; // Default color if invalid
+            }
             
             if ($name) {
                 // Get old values before update
-                $old_query = "SELECT name, description, icon, sort_order FROM categories WHERE id = :id AND restaurant_id = :restaurant_id";
+                $old_query = "SELECT name, description, icon, color, sort_order FROM categories WHERE id = :id AND restaurant_id = :restaurant_id";
                 $old_stmt = $db->prepare($old_query);
                 $old_stmt->bindParam(':id', $category_id);
                 $old_stmt->bindParam(':restaurant_id', $restaurant_id);
                 $old_stmt->execute();
                 $old_values = $old_stmt->fetch(PDO::FETCH_ASSOC);
                 
-                $query = "UPDATE categories SET name = :name, description = :description, icon = :icon, sort_order = :sort_order WHERE id = :id AND restaurant_id = :restaurant_id";
+                $query = "UPDATE categories SET name = :name, description = :description, icon = :icon, color = :color, sort_order = :sort_order WHERE id = :id AND restaurant_id = :restaurant_id";
                 $stmt = $db->prepare($query);
                 $stmt->bindParam(':name', $name);
                 $stmt->bindParam(':description', $description);
                 $stmt->bindParam(':icon', $icon);
+                $stmt->bindParam(':color', $color);
                 $stmt->bindParam(':sort_order', $sort_order);
                 $stmt->bindParam(':id', $category_id);
                 $stmt->bindParam(':restaurant_id', $restaurant_id);
@@ -727,14 +889,16 @@ $category_sales = [];
 try {
     $query = "SELECT 
         p.category,
+        c.color,
         COUNT(oi.id) as total_items_sold,
         COALESCE(SUM(oi.subtotal), 0) as total_revenue,
         COALESCE(SUM(oi.quantity), 0) as total_quantity_sold
         FROM products p
+        LEFT JOIN categories c ON p.category = c.name AND c.restaurant_id = p.restaurant_id
         LEFT JOIN order_items oi ON p.id = oi.product_id
         LEFT JOIN orders o ON oi.order_id = o.id AND o.status = 'completed' AND DATE(o.created_at) >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
         WHERE p.restaurant_id = :restaurant_id AND p.is_active = 1
-        GROUP BY p.category
+        GROUP BY p.category, c.color
         HAVING COUNT(DISTINCT p.id) > 0
         ORDER BY total_revenue DESC";
     
@@ -747,6 +911,7 @@ try {
     foreach ($raw_category_data as $cat_data) {
         $category_sales[] = [
             'category' => $cat_data['category'],
+            'color' => $cat_data['color'] ?? '#FF6B6B', // Use custom color or default
             'total_items_sold' => (int)$cat_data['total_items_sold'],
             'total_revenue' => (float)$cat_data['total_revenue'],
             'total_quantity_sold' => (int)$cat_data['total_quantity_sold']
@@ -1006,6 +1171,64 @@ try {
         ['method' => 'QR Code', 'transactions' => 0, 'amount' => 0]
     ];
 }
+
+// Get expenses data for dashboard chart (7 days)
+$expenses_data = [];
+try {
+    $query = "SELECT 
+        category,
+        COUNT(*) as transaction_count,
+        COALESCE(SUM(amount), 0) as total_amount
+        FROM expenses 
+        WHERE DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+        GROUP BY category
+        ORDER BY total_amount DESC";
+    
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $raw_expenses_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Process expenses data for chart
+    foreach ($raw_expenses_data as $expense_data) {
+        $expenses_data[] = [
+            'category' => ucfirst($expense_data['category']),
+            'transaction_count' => (int)$expense_data['transaction_count'],
+            'total_amount' => (float)$expense_data['total_amount']
+        ];
+    }
+    
+    // If no expenses data, show default categories with zero values
+    if (empty($expenses_data)) {
+        $default_expense_categories = ['Office Supplies', 'Marketing', 'Utilities', 'Food Costs', 'Equipment'];
+        foreach ($default_expense_categories as $cat) {
+            $expenses_data[] = [
+                'category' => $cat,
+                'transaction_count' => 0,
+                'total_amount' => 0
+            ];
+        }
+    }
+} catch (Exception $e) {
+    // Fallback data if query fails
+    $expenses_data = [
+        ['category' => 'Office Supplies', 'transaction_count' => 0, 'total_amount' => 0],
+        ['category' => 'Marketing', 'transaction_count' => 0, 'total_amount' => 0],
+        ['category' => 'Utilities', 'transaction_count' => 0, 'total_amount' => 0],
+        ['category' => 'Food Costs', 'transaction_count' => 0, 'total_amount' => 0],
+        ['category' => 'Equipment', 'transaction_count' => 0, 'total_amount' => 0]
+    ];
+}
+
+// Get today's total expenses for the stats card
+$today_expenses = 0;
+try {
+    $query = "SELECT COALESCE(SUM(amount), 0) as today_total FROM expenses WHERE DATE(created_at) = CURDATE()";
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $today_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['today_total'];
+} catch (Exception $e) {
+    $today_expenses = 0;
+}
 ?>
 
 <!DOCTYPE html>
@@ -1036,7 +1259,7 @@ try {
         }
     </script>
     <style>
-        :root {
+        :root, html {
             --bg-primary: #f9fafb;
             --bg-secondary: #ffffff;
             --bg-header: linear-gradient(to right, #eef2ff, #f3e8ff);
@@ -1048,7 +1271,7 @@ try {
             --accent-secondary: #6366f1;
         }
         
-        [data-theme="dark"] {
+        [data-theme="dark"], html[data-theme="dark"] {
             --bg-primary: #111827;
             --bg-secondary: #1f2937;
             --bg-header: linear-gradient(to right, #1f2937, #374151);
@@ -1060,7 +1283,7 @@ try {
             --accent-secondary: #a78bfa;
         }
         
-        [data-theme="minimal"] {
+        [data-theme="minimal"], html[data-theme="minimal"] {
             --bg-primary: #ffffff;
             --bg-secondary: #f8fafc;
             --bg-header: linear-gradient(to right, #f8fafc, #f1f5f9);
@@ -1072,7 +1295,7 @@ try {
             --accent-secondary: #334155;
         }
         
-        [data-theme="original"] {
+        [data-theme="original"], html[data-theme="original"] {
             --bg-primary: #f9fafb;
             --bg-secondary: #ffffff;
             --bg-header: #ffffff;
@@ -1085,6 +1308,12 @@ try {
         }
         
         .theme-transition {
+            /* Transition only applies during theme changes, not tab navigation */
+            transition: none;
+        }
+        
+        /* Only apply transitions when actively changing themes */
+        body.theme-changing .theme-transition {
             transition: all 0.3s ease;
         }
         
@@ -1155,8 +1384,61 @@ try {
         .hidden {
             display: none !important;
         }
+        
+        /* Placeholder text styling for better visibility */
+        input::placeholder, textarea::placeholder, select::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.7;
+        }
+        
+        [data-theme="dark"] input::placeholder,
+        [data-theme="dark"] textarea::placeholder,
+        [data-theme="dark"] select::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.8;
+        }
+        
+        /* Webkit placeholder styling */
+        input::-webkit-input-placeholder, 
+        textarea::-webkit-input-placeholder {
+            color: var(--text-secondary);
+            opacity: 0.7;
+        }
+        
+        [data-theme="dark"] input::-webkit-input-placeholder,
+        [data-theme="dark"] textarea::-webkit-input-placeholder {
+            color: var(--text-secondary);
+            opacity: 0.8;
+        }
+        
+        /* Mozilla placeholder styling */
+        input::-moz-placeholder, 
+        textarea::-moz-placeholder {
+            color: var(--text-secondary);
+            opacity: 0.7;
+        }
+        
+        [data-theme="dark"] input::-moz-placeholder,
+        [data-theme="dark"] textarea::-moz-placeholder {
+            color: var(--text-secondary);
+            opacity: 0.8;
+        }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Prevent flash of unstyled content (FOUC) by setting theme immediately -->
+    <script>
+        (function() {
+            // Get theme from localStorage immediately
+            const savedTheme = localStorage.getItem('pos-admin-theme') || 'colorful';
+            // Set theme attribute on HTML element before body renders
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            // Also set it on body if it exists
+            if (document.body) {
+                document.body.setAttribute('data-theme', savedTheme);
+            }
+        })();
+    </script>
 </head>
 <body class="theme-transition min-h-screen font-sans" style="background: var(--bg-primary)">
     <!-- Header -->
@@ -1247,6 +1529,12 @@ try {
         
         function setTheme(theme) {
             currentTheme = theme;
+            
+            // Add theme-changing class to enable transitions
+            document.body.classList.add('theme-changing');
+            
+            // Set theme on both HTML and body elements
+            document.documentElement.setAttribute('data-theme', theme);
             document.body.setAttribute('data-theme', theme);
             localStorage.setItem('pos-admin-theme', theme);
             
@@ -1259,6 +1547,11 @@ try {
             if (activeThemeBtn) {
                 activeThemeBtn.classList.add('active');
             }
+            
+            // Remove theme-changing class after transition completes
+            setTimeout(() => {
+                document.body.classList.remove('theme-changing');
+            }, 350); // Slightly longer than the 0.3s transition
         }
         
         // Product edit functions
@@ -1831,8 +2124,8 @@ try {
             const revenues = categoriesWithSales.map(cat => parseFloat(cat.total_revenue));
             const quantities = categoriesWithSales.map(cat => parseInt(cat.total_quantity_sold));
             
-            // Define colors for categories
-            const colors = [
+            // Use custom colors from database, with fallback defaults
+            const defaultColors = [
                 'rgba(255, 107, 107, 0.8)', // Red
                 'rgba(78, 205, 196, 0.8)',  // Teal
                 'rgba(255, 230, 109, 0.8)', // Yellow
@@ -1842,15 +2135,31 @@ try {
                 'rgba(72, 219, 251, 0.8)'   // Cyan
             ];
             
-            const borderColors = [
-                'rgba(255, 107, 107, 1)',
-                'rgba(78, 205, 196, 1)',
-                'rgba(255, 230, 109, 1)',
-                'rgba(116, 185, 255, 1)',
-                'rgba(162, 155, 254, 1)',
-                'rgba(255, 159, 67, 1)',
-                'rgba(72, 219, 251, 1)'
-            ];
+            // Convert hex colors to rgba for background
+            const colors = categoriesWithSales.map((cat, index) => {
+                if (cat.color) {
+                    // Convert hex to rgba with 0.8 alpha
+                    const hex = cat.color.replace('#', '');
+                    const r = parseInt(hex.substr(0, 2), 16);
+                    const g = parseInt(hex.substr(2, 2), 16);
+                    const b = parseInt(hex.substr(4, 2), 16);
+                    return `rgba(${r}, ${g}, ${b}, 0.8)`;
+                }
+                return defaultColors[index % defaultColors.length];
+            });
+            
+            // Convert hex colors to rgba for borders (full opacity)
+            const borderColors = categoriesWithSales.map((cat, index) => {
+                if (cat.color) {
+                    // Convert hex to rgba with 1.0 alpha
+                    const hex = cat.color.replace('#', '');
+                    const r = parseInt(hex.substr(0, 2), 16);
+                    const g = parseInt(hex.substr(2, 2), 16);
+                    const b = parseInt(hex.substr(4, 2), 16);
+                    return `rgba(${r}, ${g}, ${b}, 1)`;
+                }
+                return defaultColors[index % defaultColors.length].replace('0.8', '1');
+            });
             
             new Chart(ctx, {
                 type: 'doughnut',
@@ -2025,9 +2334,279 @@ try {
             });
         }
         
+        // Expenses Doughnut Chart
+        function initializeExpensesChart() {
+            const ctx = document.getElementById('expensesChart');
+            if (!ctx) return;
+            
+            // Expenses data from PHP
+            const expensesData = <?= json_encode($expenses_data) ?>;
+            
+            // Filter out expense categories with no amount for cleaner chart
+            const expensesWithAmount = expensesData.filter(expense => expense.total_amount > 0);
+            
+            // If no expenses data, show a placeholder chart
+            if (expensesWithAmount.length === 0) {
+                const emptyChart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['No Data'],
+                        datasets: [{
+                            data: [1],
+                            backgroundColor: ['rgba(200, 200, 200, 0.5)'],
+                            borderColor: ['rgba(150, 150, 150, 1)'],
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                enabled: false
+                            }
+                        }
+                    }
+                });
+                return;
+            }
+            
+            const labels = expensesWithAmount.map(expense => expense.category);
+            const amounts = expensesWithAmount.map(expense => parseFloat(expense.total_amount));
+            const transactions = expensesWithAmount.map(expense => parseInt(expense.transaction_count));
+            
+            // Define colors for expense categories (red-orange palette)
+            const colors = [
+                'rgba(239, 68, 68, 0.8)',   // Red
+                'rgba(249, 115, 22, 0.8)',  // Orange
+                'rgba(245, 158, 11, 0.8)',  // Amber
+                'rgba(234, 179, 8, 0.8)',   // Yellow
+                'rgba(132, 204, 22, 0.8)',  // Lime
+                'rgba(34, 197, 94, 0.8)',   // Green
+                'rgba(16, 185, 129, 0.8)',  // Emerald
+                'rgba(20, 184, 166, 0.8)'   // Teal
+            ];
+            
+            const borderColors = [
+                'rgba(239, 68, 68, 1)',
+                'rgba(249, 115, 22, 1)',
+                'rgba(245, 158, 11, 1)',
+                'rgba(234, 179, 8, 1)',
+                'rgba(132, 204, 22, 1)',
+                'rgba(34, 197, 94, 1)',
+                'rgba(16, 185, 129, 1)',
+                'rgba(20, 184, 166, 1)'
+            ];
+            
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Expense Amount',
+                        data: amounts,
+                        backgroundColor: colors.slice(0, labels.length),
+                        borderColor: borderColors.slice(0, labels.length),
+                        borderWidth: 2,
+                        hoverOffset: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    cutout: '60%', // Makes it a doughnut (hollow center)
+                    plugins: {
+                        legend: {
+                            display: false // We'll use custom legend below chart
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const category = context.label;
+                                    const amount = context.parsed;
+                                    const transactionCount = transactions[context.dataIndex];
+                                    const percentage = ((amount / amounts.reduce((a, b) => a + b, 0)) * 100).toFixed(1);
+                                    
+                                    return [
+                                        `${category}`,
+                                        `Amount: RM${amount.toFixed(2)}`,
+                                        `Transactions: ${transactionCount}`,
+                                        `Share: ${percentage}%`
+                                    ];
+                                }
+                            },
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: 'white',
+                            bodyColor: 'white',
+                            cornerRadius: 6,
+                            padding: 10
+                        }
+                    },
+                    animation: {
+                        animateRotate: true,
+                        animateScale: false,
+                        duration: 1000
+                    },
+                    interaction: {
+                        intersect: false
+                    }
+                }
+            });
+        }
+        
+        // Order Filtering Functions
+        function toggleOrderFilters() {
+            const filtersPanel = document.getElementById('order-filters');
+            if (filtersPanel.classList.contains('hidden')) {
+                filtersPanel.classList.remove('hidden');
+                // Set default date range (last 30 days)
+                const today = new Date();
+                const thirtyDaysAgo = new Date(today);
+                thirtyDaysAgo.setDate(today.getDate() - 30);
+                
+                document.getElementById('filter-date-from').value = thirtyDaysAgo.toISOString().split('T')[0];
+                document.getElementById('filter-date-to').value = today.toISOString().split('T')[0];
+            } else {
+                filtersPanel.classList.add('hidden');
+            }
+        }
+        
+        function applyOrderFilters() {
+            const dateFrom = document.getElementById('filter-date-from').value;
+            const dateTo = document.getElementById('filter-date-to').value;
+            const paymentMethod = document.getElementById('filter-payment-method').value;
+            const status = document.getElementById('filter-status').value;
+            
+            // Show loading state
+            document.getElementById('orders-loading').classList.remove('hidden');
+            document.getElementById('orders-grid').style.opacity = '0.5';
+            
+            const formData = new FormData();
+            formData.append('date_from', dateFrom);
+            formData.append('date_to', dateTo);
+            formData.append('payment_method', paymentMethod);
+            formData.append('status', status);
+            formData.append('limit', '20'); // Show more orders when filtering
+            
+            fetch('filter_orders.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateOrdersGrid(data.orders);
+                    updateOrdersCount(data.showing, data.total_count);
+                } else {
+                    showToast('Error filtering orders: ' + data.error, true);
+                }
+            })
+            .catch(error => {
+                showToast('Error filtering orders', true);
+                console.error('Filter error:', error);
+            })
+            .finally(() => {
+                document.getElementById('orders-loading').classList.add('hidden');
+                document.getElementById('orders-grid').style.opacity = '1';
+            });
+        }
+        
+        function clearOrderFilters() {
+            document.getElementById('filter-date-from').value = '';
+            document.getElementById('filter-date-to').value = '';
+            document.getElementById('filter-payment-method').value = '';
+            document.getElementById('filter-status').value = '';
+            
+            // Load default orders
+            applyOrderFilters();
+        }
+        
+        function updateOrdersGrid(orders) {
+            const grid = document.getElementById('orders-grid');
+            const restaurant = <?= json_encode($restaurant) ?>;
+            
+            if (orders.length === 0) {
+                grid.innerHTML = `
+                    <div class="col-span-full text-center py-8">
+                        <div class="text-4xl mb-4">📋</div>
+                        <p style="color: var(--text-secondary)">No orders found matching your criteria</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            orders.forEach(order => {
+                const date = new Date(order.created_at);
+                const formattedDate = date.toLocaleDateString('en-US', { 
+                    month: 'short', 
+                    day: 'numeric', 
+                    year: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit'
+                });
+                
+                const statusClass = order.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800';
+                const paymentMethodDisplay = order.payment_method === 'qr_code' ? 'QR Code' : 
+                                          order.payment_method.charAt(0).toUpperCase() + order.payment_method.slice(1);
+                
+                html += `
+                    <div class="p-4 rounded-lg theme-transition border" style="background: var(--bg-primary); border-color: var(--border-primary)">
+                        <div class="flex justify-between items-start mb-3">
+                            <div>
+                                <p class="font-medium" style="color: var(--text-primary)">Order #${order.id}</p>
+                                <p class="text-sm" style="color: var(--text-secondary)">By: ${order.username || 'Unknown'}</p>
+                                <p class="text-sm" style="color: var(--text-secondary)">${formattedDate}</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="font-bold text-green-500">${restaurant.currency}${parseFloat(order.total_amount).toFixed(2)}</p>
+                                <span class="inline-block px-2 py-1 text-xs rounded-full mt-1 ${statusClass}">
+                                    ${order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="flex justify-between items-center">
+                            <button 
+                                onclick="toggleOrderDetails(${order.id})" 
+                                class="text-sm px-3 py-1 rounded transition-colors hover:opacity-80"
+                                style="background: var(--accent-primary); color: white;"
+                                id="details-btn-${order.id}"
+                            >
+                                View Details
+                            </button>
+                            <p class="text-xs" style="color: var(--text-secondary)">Payment: ${paymentMethodDisplay}</p>
+                        </div>
+                        
+                        <!-- Order Items Container (loaded on demand) -->
+                        <div id="order-details-${order.id}" class="hidden border-t pt-3 mt-3" style="border-color: var(--border-primary)">
+                            <div class="loading-spinner text-center py-2">
+                                <span style="color: var(--text-secondary)">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            grid.innerHTML = html;
+        }
+        
+        function updateOrdersCount(showing, total) {
+            const countElement = document.getElementById('orders-count');
+            if (showing === total) {
+                countElement.textContent = `Showing ${total} order${total !== 1 ? 's' : ''}`;
+            } else {
+                countElement.textContent = `Showing ${showing} of ${total} orders`;
+            }
+        }
+        
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
-            // Initialize theme
+            // Initialize theme (ensure both HTML and body have theme attribute)
+            document.documentElement.setAttribute('data-theme', currentTheme);
             document.body.setAttribute('data-theme', currentTheme);
             const activeThemeBtn = document.getElementById('theme-' + currentTheme);
             if (activeThemeBtn) {
@@ -2042,6 +2621,7 @@ try {
             initializeTopMenuChart();
             initializeCategoryChart();
             initializePaymentChart();
+            initializeExpensesChart();
         });
     </script>
 </body>
