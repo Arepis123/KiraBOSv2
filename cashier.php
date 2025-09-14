@@ -350,6 +350,7 @@ $category_names = array_keys($categories);
             --border-primary: #e0e7ff;
             --accent-primary: #4f46e5;
             --accent-secondary: #6366f1;
+            --text-scale: 1;
             --hover-bg: #f3f4f6;
         }
         
@@ -711,6 +712,23 @@ $category_names = array_keys($categories);
             0% { transform: scale(1); }
             50% { transform: scale(1.05); color: #8b5cf6; }
             100% { transform: scale(1); }
+        }
+        
+        /* Text scaling support */
+        .scalable-text {
+            font-size: calc(1rem * var(--text-scale, 1));
+        }
+        .product-card h3 {
+            font-size: calc(1.125rem * var(--text-scale, 1)) !important;
+        }
+        .price-text {
+            font-size: calc(1rem * var(--text-scale, 1)) !important;
+        }
+        .cart-item-name {
+            font-size: calc(0.875rem * var(--text-scale, 1)) !important;
+        }
+        .modal-text {
+            font-size: calc(1rem * var(--text-scale, 1)) !important;
         }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -1263,10 +1281,10 @@ $category_names = array_keys($categories);
 
     <!-- Settings Modal -->
     <div id="settings-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
-        <div class="bg-white rounded-lg shadow-xl w-80 max-w-sm mx-4 theme-transition" style="background: var(--bg-secondary); border: 1px solid var(--border-primary);">
-            <div class="px-6 py-4 border-b" style="border-color: var(--border-primary);">
+        <div class="bg-white rounded-lg shadow-xl w-96 max-w-md mx-4 theme-transition max-h-[90vh] overflow-y-auto" style="background: var(--bg-secondary); border: 1px solid var(--border-primary);">
+            <div class="px-6 py-4 border-b sticky top-0" style="border-color: var(--border-primary); background: var(--bg-secondary);">
                 <div class="flex items-center justify-between">
-                    <h3 class="text-lg font-semibold" style="color: var(--text-primary);">Settings</h3>
+                    <h3 class="text-lg font-semibold" style="color: var(--text-primary);">⚙️ Cashier Settings</h3>
                     <button onclick="closeSettingsModal()" class="text-gray-400 hover:text-gray-600">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -1274,32 +1292,135 @@ $category_names = array_keys($categories);
                     </button>
                 </div>
             </div>
-            <div class="px-6 py-4">
-                <div class="mb-4">
-                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Theme</label>
-                    <div class="space-y-2">
-                        <button onclick="setTheme('colorful')" class="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-50 flex items-center space-x-3 transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);">
-                            <span class="text-lg">🎨</span>
-                            <span>Colorful</span>
+            
+            <div class="px-6 py-4 space-y-6">
+                <!-- Theme Section -->
+                <div>
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">🎨 Theme</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="setTheme('colorful')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <span>🎨</span><span>Colorful</span>
                         </button>
-                        <button onclick="setTheme('dark')" class="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-50 flex items-center space-x-3 transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);">
-                            <span class="text-lg">🌙</span>
-                            <span>Dark</span>
+                        <button onclick="setTheme('dark')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <span>🌙</span><span>Dark</span>
                         </button>
-                        <button onclick="setTheme('minimal')" class="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-50 flex items-center space-x-3 transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);">
-                            <span class="text-lg">⚪</span>
-                            <span>Minimal</span>
+                        <button onclick="setTheme('minimal')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <span>⚪</span><span>Minimal</span>
                         </button>
-                        <button onclick="setTheme('original')" class="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-50 flex items-center space-x-3 transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);">
-                            <span class="text-lg">⚫</span>
-                            <span>Original</span>
+                        <button onclick="setTheme('original')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <span>⚫</span><span>Original</span>
                         </button>
                     </div>
                 </div>
-                
+
+                <!-- Sound Settings -->
+                <div class="border-t pt-4" style="border-color: var(--border-primary);">
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">🔊 Sound Settings</label>
+                    <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm" style="color: var(--text-primary);">Button Click Sounds</span>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="sound-clicks" class="sr-only peer" onchange="toggleSoundSetting('clicks', this.checked)">
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm" style="color: var(--text-primary);">Order Success Sound</span>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="sound-success" class="sr-only peer" onchange="toggleSoundSetting('success', this.checked)" checked>
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        </div>
+                        <div class="flex space-x-2 pt-2">
+                            <button onclick="testSound('click')" class="flex-1 text-xs px-3 py-2 rounded-lg transition-colors" style="background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-primary);">🔊 Test Click</button>
+                            <button onclick="testSound('success')" class="flex-1 text-xs px-3 py-2 rounded-lg transition-colors" style="background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-primary);">🎉 Test Success</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Display Settings -->
+                <div class="border-t pt-4" style="border-color: var(--border-primary);">
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">📱 Display Settings</label>
+                    <div class="space-y-3">
+                        <div>
+                            <span class="block text-sm mb-1" style="color: var(--text-primary);">Text Size</span>
+                            <select id="text-size" onchange="setTextSize(this.value)" class="w-full px-3 py-2 text-sm border rounded-lg" style="background: var(--bg-primary); color: var(--text-primary); border-color: var(--border-primary);">
+                                <option value="small">Small</option>
+                                <option value="medium">Medium</option>
+                                <option value="large">Large</option>
+                            </select>
+                        </div>
+                        <div>
+                            <span class="block text-sm mb-1" style="color: var(--text-primary);">Currency Format</span>
+                            <select id="currency-format" onchange="setCurrencyFormat(this.value)" class="w-full px-3 py-2 text-sm border rounded-lg" style="background: var(--bg-primary); color: var(--text-primary); border-color: var(--border-primary);">
+                                <option value="RM0.00" selected>RM0.00</option>
+                                <option value="RM 0.00">RM 0.00</option>
+                                <option value="0.00 RM">0.00 RM</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Numpad Layout -->
+                <div class="border-t pt-4" style="border-color: var(--border-primary);">
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">🔢 Numpad Layout</label>
+                    <div class="grid grid-cols-1 gap-2">
+                        <button onclick="setNumpadLayout('calculator')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);" id="layout-calculator">
+                            <div class="flex items-center justify-between">
+                                <span>Calculator (7-8-9 top)</span>
+                                <div class="text-xs opacity-60">
+                                    <div>7 8 9</div>
+                                    <div>4 5 6</div>
+                                    <div>1 2 3</div>
+                                </div>
+                            </div>
+                        </button>
+                        <button onclick="setNumpadLayout('phone')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);" id="layout-phone">
+                            <div class="flex items-center justify-between">
+                                <span>Phone (1-2-3 top)</span>
+                                <div class="text-xs opacity-60">
+                                    <div>1 2 3</div>
+                                    <div>4 5 6</div>
+                                    <div>7 8 9</div>
+                                </div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Workflow Settings -->
+                <div class="border-t pt-4" style="border-color: var(--border-primary);">
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">⚡ Workflow Settings</label>
+                    <div class="space-y-3">
+                        <div>
+                            <span class="block text-sm mb-1" style="color: var(--text-primary);">Default Payment Method</span>
+                            <select id="default-payment" onchange="setDefaultPayment(this.value)" class="w-full px-3 py-2 text-sm border rounded-lg" style="background: var(--bg-primary); color: var(--text-primary); border-color: var(--border-primary);">
+                                <option value="cash">💵 Cash</option>
+                                <option value="qr_code">📱 QR Code</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm" style="color: var(--text-primary);">Auto-clear cart after payment</span>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="auto-clear" class="sr-only peer" onchange="toggleWorkflowSetting('autoClear', this.checked)" checked>
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        </div>
+                        <div>
+                            <span class="block text-sm mb-1" style="color: var(--text-primary);">Quick Amount Buttons</span>
+                            <div class="flex space-x-1">
+                                <input type="number" id="quick1" value="10" onchange="setQuickAmounts()" class="w-16 px-2 py-1 text-xs border rounded" style="background: var(--bg-primary); color: var(--text-primary); border-color: var(--border-primary);">
+                                <input type="number" id="quick2" value="20" onchange="setQuickAmounts()" class="w-16 px-2 py-1 text-xs border rounded" style="background: var(--bg-primary); color: var(--text-primary); border-color: var(--border-primary);">
+                                <input type="number" id="quick3" value="50" onchange="setQuickAmounts()" class="w-16 px-2 py-1 text-xs border rounded" style="background: var(--bg-primary); color: var(--text-primary); border-color: var(--border-primary);">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Admin Options -->
                 <?php if ($_SESSION['role'] === 'admin'): ?>
                 <div class="border-t pt-4" style="border-color: var(--border-primary);">
-                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">Admin Options</label>
+                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">🔧 Admin Options</label>
                     <button onclick="window.location.href='admin.php'" class="w-full text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-3" style="color: var(--text-primary); background: var(--bg-primary);">
                         <span class="text-lg">🔧</span>
                         <span>Admin Panel</span>
@@ -1322,9 +1443,26 @@ $category_names = array_keys($categories);
         let currentPaymentMethod = 'cash';
         let amountTendered = '';
         
+        // Get current cashier settings (helper function)
+        function getCashierSettings() {
+            return cashierSettings || {
+                theme: { mode: 'modern' },
+                sounds: { clicks: false, success: true },
+                display: { textSize: 'medium', currencyFormat: 'RM0.00' },
+                numpad: { layout: 'calculator' },
+                workflow: { defaultPayment: 'cash', autoClear: true, quickAmounts: [10, 20, 50] }
+            };
+        }
+        
         // Currency formatting helper
         function formatCurrency(amount) {
-            return restaurantConfig.currency + amount.toFixed(2);
+            const settings = getCashierSettings();
+            if (settings.display.currencyFormat === 'RM 0.00') {
+                return restaurantConfig.currency + ' ' + amount.toFixed(2);
+            } else if (settings.display.currencyFormat === '0.00 RM') {
+                return amount.toFixed(2) + ' ' + restaurantConfig.currency;
+            }
+            return restaurantConfig.currency + amount.toFixed(2); // Default format
         }
 
 
@@ -1708,6 +1846,9 @@ $category_names = array_keys($categories);
         }
 
         function addToCart(productId, productName, productPrice, buttonElement) {
+            // Play click sound when adding item
+            playClickSound();
+            
             // Check if product is out of stock
             const productCard = document.querySelector(`[data-product-id="${productId}"]`);
             if (productCard && productCard.dataset.trackStock === '1') {
@@ -1995,8 +2136,9 @@ $category_names = array_keys($categories);
             document.getElementById('modal-total').textContent = formatCurrency(currentTotal);
             document.getElementById('qr-total').textContent = `Total: ${formatCurrency(currentTotal)}`;
             
-            // Reset payment form
-            selectPaymentMethod('cash');
+            // Apply default payment method from settings
+            const settings = getCashierSettings();
+            selectPaymentMethod(settings.workflow.defaultPayment);
             clearAmount();
         }
 
@@ -2047,6 +2189,9 @@ $category_names = array_keys($categories);
         }
 
         function addDigit(digit) {
+            // Play click sound for numpad
+            playClickSound();
+            
             // Malaysian banking app approach - no decimal input needed
             // Always work in cents/sen, auto-format to ringgit display
             
@@ -2206,6 +2351,9 @@ $category_names = array_keys($categories);
                     cart = {};
                     updateCartDisplay();
                     closePaymentModal();
+                    
+                    // Play success sound for completed payment
+                    playSuccessSound();
                     
                     if (currentPaymentMethod === 'cash' && paymentData.change_given > 0) {
                         showToast(`Payment completed! Change: RM${paymentData.change_given.toFixed(2)}`);
@@ -2684,6 +2832,8 @@ $category_names = array_keys($categories);
             const modal = document.getElementById('settings-modal');
             if (modal) {
                 modal.classList.remove('hidden');
+                // Update settings UI when modal opens
+                updateAllSettingsUI();
             }
         }
 
@@ -2693,6 +2843,433 @@ $category_names = array_keys($categories);
                 modal.classList.add('hidden');
             }
         }
+
+        // Cashier Settings Functions
+        let cashierSettings = {
+            theme: {
+                mode: 'modern'
+            },
+            sounds: {
+                clicks: false,
+                success: true
+            },
+            display: {
+                textSize: 'medium',
+                currencyFormat: 'RM0.00'
+            },
+            numpad: {
+                layout: 'calculator'
+            },
+            workflow: {
+                defaultPayment: 'cash',
+                autoClear: true,
+                quickAmounts: [10, 20, 50]
+            }
+        };
+
+        // Load settings from localStorage
+        function loadCashierSettings() {
+            const saved = localStorage.getItem('cashierSettings');
+            if (saved) {
+                try {
+                    const savedSettings = JSON.parse(saved);
+                    cashierSettings = {...cashierSettings, ...savedSettings};
+                } catch (e) {
+                    console.warn('Failed to load saved settings:', e);
+                }
+            }
+            console.log('Cashier settings loaded:', cashierSettings);
+        }
+
+        // Save settings to localStorage
+        function saveCashierSettings() {
+            localStorage.setItem('cashierSettings', JSON.stringify(cashierSettings));
+        }
+
+        // Apply all settings to the interface
+        function applyCashierSettings() {
+            // Apply sound settings
+            document.getElementById('sound-clicks').checked = cashierSettings.sounds.clicks;
+            document.getElementById('sound-success').checked = cashierSettings.sounds.success;
+            
+            // Apply display settings
+            document.getElementById('text-size').value = cashierSettings.display.textSize;
+            document.getElementById('currency-format').value = cashierSettings.display.currencyFormat;
+            setTextSize(cashierSettings.display.textSize);
+            
+            // Apply numpad layout
+            setNumpadLayout(cashierSettings.numpad.layout);
+            
+            // Apply workflow settings
+            document.getElementById('default-payment').value = cashierSettings.workflow.defaultPayment;
+            document.getElementById('auto-clear').checked = cashierSettings.workflow.autoClear;
+            currentPaymentMethod = cashierSettings.workflow.defaultPayment;
+            
+            // Apply quick amounts
+            document.getElementById('quick1').value = cashierSettings.workflow.quickAmounts[0];
+            document.getElementById('quick2').value = cashierSettings.workflow.quickAmounts[1];
+            document.getElementById('quick3').value = cashierSettings.workflow.quickAmounts[2];
+            updateQuickAmountButtons();
+        }
+
+        // Sound Settings
+        function toggleSoundSetting(type, enabled) {
+            cashierSettings.sounds[type] = enabled;
+            saveCashierSettings();
+            
+            // Test sound when enabled
+            if (enabled) {
+                if (type === 'clicks') {
+                    playClickSound();
+                } else if (type === 'success') {
+                    playSuccessSound();
+                }
+            }
+        }
+        
+        // Test sound function for settings
+        function testSound(type) {
+            if (type === 'click') {
+                playClickSound();
+            } else if (type === 'success') {
+                playSuccessSound();
+            }
+        }
+
+        // Global audio context (initialize once)
+        let globalAudioContext = null;
+        
+        function initAudioContext() {
+            if (!globalAudioContext) {
+                try {
+                    globalAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) {
+                    console.warn('Web Audio API not supported:', e);
+                    return null;
+                }
+            }
+            
+            // Resume audio context if suspended (required by browsers)
+            if (globalAudioContext.state === 'suspended') {
+                globalAudioContext.resume();
+            }
+            
+            return globalAudioContext;
+        }
+        
+        function playClickSound() {
+            if (!cashierSettings.sounds.clicks) return;
+            
+            const audioContext = initAudioContext();
+            if (!audioContext) return;
+            
+            try {
+                // Create a short click sound
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                oscillator.frequency.value = 1200; // Higher frequency for clear click
+                oscillator.type = 'square'; // Sharp click sound
+                
+                gainNode.gain.setValueAtTime(0.15, audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.05);
+                
+                oscillator.start(audioContext.currentTime);
+                oscillator.stop(audioContext.currentTime + 0.05);
+                
+                console.log('🔊 Click sound played');
+            } catch (e) {
+                console.warn('Failed to play click sound:', e);
+            }
+        }
+
+        function playSuccessSound() {
+            if (!cashierSettings.sounds.success) return;
+            
+            const audioContext = initAudioContext();
+            if (!audioContext) return;
+            
+            try {
+                // Create a pleasant success chime (two-tone)
+                const frequencies = [523, 659]; // C and E notes for pleasant sound
+                
+                frequencies.forEach((freq, index) => {
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    
+                    oscillator.frequency.value = freq;
+                    oscillator.type = 'sine';
+                    
+                    const startTime = audioContext.currentTime + (index * 0.1);
+                    gainNode.gain.setValueAtTime(0, startTime);
+                    gainNode.gain.linearRampToValueAtTime(0.2, startTime + 0.05);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + 0.4);
+                    
+                    oscillator.start(startTime);
+                    oscillator.stop(startTime + 0.4);
+                });
+                
+                console.log('🎉 Success sound played');
+            } catch (e) {
+                console.warn('Failed to play success sound:', e);
+            }
+        }
+
+        // Display Settings
+        function setTextSize(size) {
+            cashierSettings.display.textSize = size;
+            saveCashierSettings();
+            
+            // Apply text scaling
+            applyTextScale(size);
+            
+            // Update UI to show selection
+            updateTextSizeSelection(size);
+        }
+
+        function setCurrencyFormat(format) {
+            cashierSettings.display.currencyFormat = format;
+            saveCashierSettings();
+            updateCartDisplay(); // Refresh cart display with new format
+        }
+
+        // Numpad Layout
+        function setNumpadLayout(layout) {
+            cashierSettings.numpad.layout = layout;
+            saveCashierSettings();
+            
+            // Apply layout and update UI
+            applyNumpadLayout(layout);
+            updateNumpadLayoutSelection(layout);
+            
+            console.log(`Numpad layout set to: ${layout}`);
+        }
+
+        function applyNumpadLayout(layout) {
+            const numpadContainer = document.querySelector('.number-pad');
+            if (!numpadContainer) return;
+            
+            // Store current buttons data
+            const buttons = numpadContainer.querySelectorAll('button');
+            const buttonData = Array.from(buttons).map(btn => ({
+                text: btn.textContent,
+                onclick: btn.getAttribute('onclick'),
+                className: btn.className,
+                style: btn.getAttribute('style') || '',
+                onmouseover: btn.getAttribute('onmouseover') || '',
+                onmouseout: btn.getAttribute('onmouseout') || ''
+            }));
+            
+            // Clear existing layout
+            numpadContainer.innerHTML = '';
+            
+            let buttonOrder;
+            if (layout === 'calculator' || layout === 'accountant') {
+                // Calculator layout: 7-8-9, 4-5-6, 1-2-3, 0-00-C
+                // (accountant was identical, so we handle it here for backwards compatibility)
+                buttonOrder = [7, 8, 9, 4, 5, 6, 1, 2, 3, 0, '00', 'C'];
+            } else if (layout === 'phone') {
+                // Phone layout: 1-2-3, 4-5-6, 7-8-9, 0-00-C
+                buttonOrder = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, '00', 'C'];
+            } else if (layout === 'atm') {
+                // ATM layout: 1-2-3, 4-5-6, 7-8-9, C-0-00
+                buttonOrder = [1, 2, 3, 4, 5, 6, 7, 8, 9, 'C', 0, '00'];
+            } else {
+                // Default calculator layout
+                buttonOrder = [7, 8, 9, 4, 5, 6, 1, 2, 3, 0, '00', 'C'];
+            }
+            
+            // Rebuild buttons in new order
+            buttonOrder.forEach(num => {
+                const btnData = buttonData.find(b => 
+                    b.text === num.toString() || 
+                    (num === 'C' && b.text === 'C') ||
+                    (num === '00' && b.text === '00')
+                );
+                
+                if (btnData) {
+                    const button = document.createElement('button');
+                    button.textContent = btnData.text;
+                    button.setAttribute('onclick', btnData.onclick);
+                    button.className = btnData.className;
+                    if (btnData.style) button.setAttribute('style', btnData.style);
+                    if (btnData.onmouseover) button.setAttribute('onmouseover', btnData.onmouseover);
+                    if (btnData.onmouseout) button.setAttribute('onmouseout', btnData.onmouseout);
+                    numpadContainer.appendChild(button);
+                }
+            });
+            
+            console.log(`Applied ${layout} numpad layout`);
+        }
+
+        // Workflow Settings
+        function setDefaultPayment(method) {
+            cashierSettings.workflow.defaultPayment = method;
+            saveCashierSettings();
+            
+            // Update UI to show current selection
+            updateDefaultPaymentSelection(method);
+            
+            console.log(`Default payment method set to: ${method}`);
+        }
+
+        function toggleWorkflowSetting(setting, enabled) {
+            cashierSettings.workflow[setting] = enabled;
+            saveCashierSettings();
+        }
+
+        function setQuickAmounts() {
+            const quick1 = parseInt(document.getElementById('quick1').value) || 10;
+            const quick2 = parseInt(document.getElementById('quick2').value) || 20;
+            const quick3 = parseInt(document.getElementById('quick3').value) || 50;
+            
+            cashierSettings.workflow.quickAmounts = [quick1, quick2, quick3];
+            saveCashierSettings();
+            updateQuickAmountButtons();
+        }
+
+        function updateQuickAmountButtons() {
+            const buttons = document.querySelectorAll('[onclick^="addQuickAmount"]');
+            buttons.forEach((btn, index) => {
+                if (index < cashierSettings.workflow.quickAmounts.length) {
+                    const amount = cashierSettings.workflow.quickAmounts[index];
+                    btn.textContent = `+${amount}`;
+                    btn.onclick = () => addQuickAmount(amount);
+                }
+            });
+        }
+        
+        // Initialize cashier settings system
+        function initializeCashierSettings() {
+            loadCashierSettings();
+            
+            // Apply theme
+            setTheme(cashierSettings.theme.mode);
+            
+            // Apply display settings
+            applyTextScale(cashierSettings.display.textSize);
+            
+            // Apply numpad layout
+            setNumpadLayout(cashierSettings.numpad.layout);
+            
+            // Apply workflow settings
+            setDefaultPayment(cashierSettings.workflow.defaultPayment);
+            updateQuickAmountButtons();
+            
+            // Update all UI selections to reflect current settings
+            updateAllSettingsUI();
+            
+            console.log('Cashier settings initialized:', cashierSettings);
+        }
+        
+        // Update all settings UI to show current selections
+        function updateAllSettingsUI() {
+            // Delay to ensure DOM elements are available
+            setTimeout(() => {
+                // Update text size selection
+                updateTextSizeSelection(cashierSettings.display.textSize);
+                
+                // Update numpad layout selection
+                updateNumpadLayoutSelection(cashierSettings.numpad.layout);
+                
+                // Update currency format selection
+                updateCurrencyFormatSelection(cashierSettings.display.currencyFormat);
+                
+                // Update sound toggles
+                updateSoundToggles();
+                
+                // Update default payment method
+                updateDefaultPaymentSelection(cashierSettings.workflow.defaultPayment);
+                
+                console.log('Settings UI updated for:', cashierSettings.display.textSize);
+            }, 200);
+        }
+        
+        // Update numpad layout selection in UI
+        function updateNumpadLayoutSelection(layout) {
+            document.querySelectorAll('[id^="layout-"]').forEach(btn => {
+                btn.style.background = 'var(--bg-primary)';
+                btn.style.fontWeight = 'normal';
+                btn.style.color = 'var(--text-primary)';
+            });
+            
+            const selectedBtn = document.getElementById(`layout-${layout}`);
+            if (selectedBtn) {
+                selectedBtn.style.background = 'var(--accent-primary)';
+                selectedBtn.style.fontWeight = 'bold';
+                selectedBtn.style.color = 'white';
+            }
+        }
+        
+        // Update currency format selection in UI
+        function updateCurrencyFormatSelection(format) {
+            document.querySelectorAll('[id^="currency-"]').forEach(btn => {
+                btn.style.background = 'var(--bg-primary)';
+                btn.style.fontWeight = 'normal';
+                btn.style.color = 'var(--text-primary)';
+            });
+            
+            const formatId = format.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+            const selectedBtn = document.getElementById(`currency-${formatId}`) || 
+                              document.getElementById('currency-rm0-00'); // fallback
+            if (selectedBtn) {
+                selectedBtn.style.background = 'var(--accent-primary)';
+                selectedBtn.style.fontWeight = 'bold';
+                selectedBtn.style.color = 'white';
+            }
+        }
+        
+        // Update sound toggles in UI
+        function updateSoundToggles() {
+            const clicksToggle = document.querySelector('input[type="checkbox"][onchange*="clicks"]');
+            const successToggle = document.querySelector('input[type="checkbox"][onchange*="success"]');
+            
+            if (clicksToggle) clicksToggle.checked = cashierSettings.sounds.clicks;
+            if (successToggle) successToggle.checked = cashierSettings.sounds.success;
+        }
+        
+        // Update default payment method selection in UI
+        function updateDefaultPaymentSelection(method) {
+            const defaultPaymentSelect = document.getElementById('default-payment');
+            if (defaultPaymentSelect) {
+                defaultPaymentSelect.value = method;
+                console.log(`Default payment select updated to: ${method}`);
+            }
+        }
+        
+        // Text scaling helper
+        function applyTextScale(size) {
+            const scales = {
+                'small': '0.8',
+                'medium': '0.9', 
+                'large': '1',
+                'extra-large': '1.1'
+            };
+            const scale = scales[size] || '0.9';
+            
+            // Set CSS custom property for text scaling
+            document.documentElement.style.setProperty('--text-scale', scale);
+            
+            // Update settings UI to reflect current selection
+            updateTextSizeSelection(size);
+            
+            console.log(`Text scale applied: ${scale} (${size})`);
+        }
+        
+        // Update text size selection in settings UI
+        function updateTextSizeSelection(size) {
+            const textSizeSelect = document.getElementById('text-size');
+            if (textSizeSelect) {
+                textSizeSelect.value = size;
+                console.log(`Text size select updated to: ${size}`);
+            }
+        }
         
         // Initialize
 
@@ -2700,9 +3277,11 @@ $category_names = array_keys($categories);
             updateCartDisplay();
             setActiveTab(document.querySelector('.tab-btn.active'));
             
-            // Initialize theme with a small delay to ensure DOM is fully ready
+            // Initialize theme and settings with a small delay to ensure DOM is fully ready
             setTimeout(() => {
-                setTheme(currentTheme);
+                // Load and apply cashier settings
+                initializeCashierSettings();
+                
                 // Show all products and apply theme styling
                 showAllProducts();
                 // Initialize stock badges to ensure they work from first click

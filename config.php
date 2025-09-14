@@ -17,7 +17,7 @@ class Database {
         $isProduction = !empty($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== 'localhost';
         
         if ($isProduction) {
-            // Production credentials - UPDATE THESE WITH YOUR ACTUAL PRODUCTION VALUES
+            // Production credentials
             $this->host = 'localhost';
             $this->db_name = 'kirabos_multitenant';
             $this->username = 'test';  
