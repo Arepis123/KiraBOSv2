@@ -1239,6 +1239,7 @@ try {
     <title>KiraBOS - Admin Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -1464,27 +1465,27 @@ try {
         <div class="container mx-auto px-4">
             <div class="flex space-x-1 overflow-x-auto">
                 <a href="admin.php?page=dashboard" id="tab-dashboard" class="nav-tab <?= ($current_page === 'dashboard') ? 'active' : '' ?> flex items-center space-x-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap" style="color: <?= ($current_page === 'dashboard') ? 'var(--accent-primary)' : 'var(--text-secondary)' ?>; border-bottom: <?= ($current_page === 'dashboard') ? '2px solid var(--accent-primary)' : 'none' ?>; text-decoration: none;">
-                    <span>📊</span>
+                    <i data-lucide="chart-no-axes-combined" class="w-4 h-4"></i>
                     <span>Dashboard</span>
                 </a>
                 <a href="admin.php?page=menu" id="tab-menu" class="nav-tab <?= ($current_page === 'menu') ? 'active' : '' ?> flex items-center space-x-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap" style="color: <?= ($current_page === 'menu') ? 'var(--accent-primary)' : 'var(--text-secondary)' ?>; border-bottom: <?= ($current_page === 'menu') ? '2px solid var(--accent-primary)' : 'none' ?>; text-decoration: none;">
-                    <span>🍽️</span>
+                    <i data-lucide="clipboard-list" class="w-4 h-4"></i>
                     <span>Menu Management</span>
                 </a>
                 <a href="admin.php?page=users" id="tab-users" class="nav-tab <?= ($current_page === 'users') ? 'active' : '' ?> flex items-center space-x-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap" style="color: <?= ($current_page === 'users') ? 'var(--accent-primary)' : 'var(--text-secondary)' ?>; border-bottom: <?= ($current_page === 'users') ? '2px solid var(--accent-primary)' : 'none' ?>; text-decoration: none;">
-                    <span>👥</span>
+                    <i data-lucide="users" class="w-4 h-4"></i>
                     <span>User Management</span>
                 </a>
                 <a href="admin.php?page=logs" id="tab-logs" class="nav-tab <?= ($current_page === 'logs') ? 'active' : '' ?> flex items-center space-x-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap" style="color: <?= ($current_page === 'logs') ? 'var(--accent-primary)' : 'var(--text-secondary)' ?>; border-bottom: <?= ($current_page === 'logs') ? '2px solid var(--accent-primary)' : 'none' ?>; text-decoration: none;">
-                    <span>📝</span>
+                    <i data-lucide="file-text" class="w-4 h-4"></i>
                     <span>Activity Logs</span>
                 </a>
                 <a href="admin.php?page=reports" id="tab-reports" class="nav-tab <?= ($current_page === 'reports') ? 'active' : '' ?> flex items-center space-x-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap" style="color: <?= ($current_page === 'reports') ? 'var(--accent-primary)' : 'var(--text-secondary)' ?>; border-bottom: <?= ($current_page === 'reports') ? '2px solid var(--accent-primary)' : 'none' ?>; text-decoration: none;">
-                    <span>📈</span>
+                    <i data-lucide="trending-up" class="w-4 h-4"></i>
                     <span>Sales Reports</span>
                 </a>
                 <a href="admin.php?page=settings" id="tab-settings" class="nav-tab <?= ($current_page === 'settings') ? 'active' : '' ?> flex items-center space-x-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap" style="color: <?= ($current_page === 'settings') ? 'var(--accent-primary)' : 'var(--text-secondary)' ?>; border-bottom: <?= ($current_page === 'settings') ? '2px solid var(--accent-primary)' : 'none' ?>; text-decoration: none;">
-                    <span>⚙️</span>
+                    <i data-lucide="settings" class="w-4 h-4"></i>
                     <span>Settings</span>
                 </a>
             </div>
@@ -2605,6 +2606,9 @@ try {
         
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
+            // Initialize Lucide icons
+            lucide.createIcons();
+
             // Initialize theme (ensure both HTML and body have theme attribute)
             document.documentElement.setAttribute('data-theme', currentTheme);
             document.body.setAttribute('data-theme', currentTheme);
@@ -2612,10 +2616,10 @@ try {
             if (activeThemeBtn) {
                 activeThemeBtn.classList.add('active');
             }
-            
+
             // Auto-hide messages
             autoHideMessages();
-            
+
             // Initialize Charts
             initializeSalesTrendChart();
             initializeTopMenuChart();

@@ -11,12 +11,34 @@ $restaurant = Restaurant::getCurrentRestaurant();
 // Handle AJAX requests for adding items to cart
 if ($_POST && isset($_POST['action'])) {
     header('Content-Type: application/json');
-    
+
+    // Handle menu view logging (non-critical, skip CSRF for performance)
+    if ($_POST['action'] === 'log_menu_view') {
+        try {
+            $product_id = (int)$_POST['product_id'];
+            $product_name = Security::sanitize($_POST['product_name'] ?? '');
+
+            if ($product_id > 0 && !empty($product_name)) {
+                ActivityLogger::log(
+                    'view_menu',
+                    "Viewed menu item: {$product_name}",
+                    'products',
+                    $product_id
+                );
+            }
+            echo json_encode(['success' => true]);
+            exit();
+        } catch (Exception $e) {
+            echo json_encode(['success' => false]);
+            exit();
+        }
+    }
+
     if (!Security::validateCSRFToken($_POST['csrf_token'] ?? '')) {
         echo json_encode(['success' => false, 'message' => 'Invalid request']);
         exit();
     }
-    
+
     if ($_POST['action'] === 'add_to_cart') {
         $product_id = (int)$_POST['product_id'];
         $quantity = (int)$_POST['quantity'];
@@ -104,19 +126,19 @@ if ($_POST && isset($_POST['action'])) {
             $category = Security::sanitize($_POST['category'] ?? '');
             $amount = floatval($_POST['amount'] ?? 0);
             $description = Security::sanitize($_POST['description'] ?? '');
-            
+
             if (empty($category) || $amount <= 0) {
                 echo json_encode(['success' => false, 'message' => 'Invalid expense data']);
                 exit();
             }
-            
+
             // Valid categories
             $validCategories = ['ingredients', 'supplies', 'maintenance', 'delivery', 'utilities', 'other'];
             if (!in_array($category, $validCategories)) {
                 echo json_encode(['success' => false, 'message' => 'Invalid category']);
                 exit();
             }
-            
+
             // Insert expense into database
             $query = "INSERT INTO expenses (restaurant_id, user_id, category, amount, description, created_at) VALUES (?, ?, ?, ?, ?, NOW())";
             $stmt = $db->prepare($query);
@@ -127,10 +149,10 @@ if ($_POST && isset($_POST['action'])) {
                 $amount,
                 $description
             ]);
-            
+
             if ($result) {
                 echo json_encode([
-                    'success' => true, 
+                    'success' => true,
                     'message' => 'Expense added successfully',
                     'expense_id' => $db->lastInsertId()
                 ]);
@@ -234,11 +256,31 @@ if ($_POST && isset($_POST['action'])) {
                 }
                 
                 $db->commit();
+
+                // Log order creation
+                $item_summary = [];
+                foreach ($_SESSION['cart'] as $item) {
+                    $item_summary[] = $item['name'] . ' x' . $item['quantity'];
+                }
+                ActivityLogger::log(
+                    'create',
+                    "Created order #{$order_number} - Total: MYR " . number_format($total, 2) . " - Items: " . implode(', ', $item_summary),
+                    'orders',
+                    $order_id,
+                    null,
+                    [
+                        'order_number' => $order_number,
+                        'total' => $total,
+                        'payment_method' => $payment_method,
+                        'items_count' => count($_SESSION['cart'])
+                    ]
+                );
+
                 $_SESSION['cart'] = [];
-                
+
                 echo json_encode([
-                    'success' => true, 
-                    'message' => 'Order completed successfully', 
+                    'success' => true,
+                    'message' => 'Order completed successfully',
                     'order_id' => $order_id,
                     'order_number' => $order_number,
                     'subtotal' => $subtotal,
@@ -320,6 +362,7 @@ $category_names = array_keys($categories);
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KiraBOS - Cashier</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -1058,28 +1101,28 @@ $category_names = array_keys($categories);
             <div class="theme-transition px-4 py-2" style="background: var(--bg-secondary); border-top: 1px solid var(--border-primary)">
                 <div class="flex justify-center space-x-6">
                     <button onclick="showMenuSection()" class="flex flex-col items-center py-1" style="color: var(--accent-primary)">
-                        <div class="w-5 h-5 mb-1">📋</div>
+                        <i data-lucide="clipboard-list" class="w-5 h-5 mb-1"></i>
                         <span class="text-xs font-medium">Orders</span>
                     </button>
-                    <button class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
-                        <div class="w-5 h-5 mb-1">📊</div>
+                    <!-- <button class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
+                        <i data-lucide="bar-chart-3" class="w-5 h-5 mb-1"></i>
                         <span class="text-xs font-medium">Reports</span>
-                    </button>
+                    </button> -->
                     <button onclick="showSettingsModal()" class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
-                        <div class="w-5 h-5 mb-1">⚙️</div>
+                        <i data-lucide="settings" class="w-5 h-5 mb-1"></i>
                         <span class="text-xs font-medium">Settings</span>
                     </button>
-                    <button class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
-                        <div class="w-5 h-5 mb-1">🔔</div>
+                    <!-- <button class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
+                        <i data-lucide="bell" class="w-5 h-5 mb-1"></i>
                         <span class="text-xs font-medium">Alerts</span>
-                    </button>
+                    </button> -->
                     <button onclick="showExpensesSection()" class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
-                        <div class="w-5 h-5 mb-1">💰</div>
+                        <i data-lucide="wallet" class="w-5 h-5 mb-1"></i>
                         <span class="text-xs font-medium">Expenses</span>
                     </button>
                     <?php if ($_SESSION['role'] === 'admin'): ?>
                     <button onclick="window.location.href='admin.php'" class="flex flex-col items-center py-1" style="color: var(--text-secondary)">
-                        <div class="w-5 h-5 mb-1">👑</div>
+                        <i data-lucide="shield-user" class="w-5 h-5 mb-1"></i>
                         <span class="text-xs font-medium">Admin</span>
                     </button>
                     <?php endif; ?>
@@ -1900,10 +1943,13 @@ $category_names = array_keys($categories);
                             quantity: 1
                         };
                     }
-                    
+
+                    // Log menu view activity
+                    logMenuView(productId, productName);
+
                     // Update stock badge immediately for this specific product
                     updateSingleProductStock(productId);
-                    
+
                     updateCartDisplay();
                     
                     // Success state - but allow immediate re-clicking
@@ -2959,31 +3005,45 @@ $category_names = array_keys($categories);
         
         function playClickSound() {
             if (!cashierSettings.sounds.clicks) return;
-            
+
             const audioContext = initAudioContext();
             if (!audioContext) return;
-            
+
             try {
                 // Create a short click sound
                 const oscillator = audioContext.createOscillator();
                 const gainNode = audioContext.createGain();
-                
+
                 oscillator.connect(gainNode);
                 gainNode.connect(audioContext.destination);
-                
+
                 oscillator.frequency.value = 1200; // Higher frequency for clear click
                 oscillator.type = 'square'; // Sharp click sound
-                
+
                 gainNode.gain.setValueAtTime(0.15, audioContext.currentTime);
                 gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.05);
-                
+
                 oscillator.start(audioContext.currentTime);
                 oscillator.stop(audioContext.currentTime + 0.05);
-                
+
                 console.log('🔊 Click sound played');
             } catch (e) {
                 console.warn('Failed to play click sound:', e);
             }
+        }
+
+        // Log menu view activity
+        function logMenuView(productId, productName) {
+            fetch('cashier.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `action=log_menu_view&product_id=${productId}&product_name=${encodeURIComponent(productName)}`
+            })
+            .catch(error => {
+                // Silent fail - logging is non-critical
+            });
         }
 
         function playSuccessSound() {
@@ -3274,14 +3334,17 @@ $category_names = array_keys($categories);
         // Initialize
 
         document.addEventListener('DOMContentLoaded', function() {
+            // Initialize Lucide icons
+            lucide.createIcons();
+
             updateCartDisplay();
             setActiveTab(document.querySelector('.tab-btn.active'));
-            
+
             // Initialize theme and settings with a small delay to ensure DOM is fully ready
             setTimeout(() => {
                 // Load and apply cashier settings
                 initializeCashierSettings();
-                
+
                 // Show all products and apply theme styling
                 showAllProducts();
                 // Initialize stock badges to ensure they work from first click
@@ -3324,6 +3387,53 @@ $category_names = array_keys($categories);
                     const modal = document.getElementById('clear-order-modal');
                     if (modal && !modal.classList.contains('hidden')) {
                         cancelClearOrder();
+                    }
+                }
+            });
+
+            // Auto-focus search bar when user starts typing
+            document.addEventListener('keydown', function(e) {
+                const searchInput = document.getElementById('search-input');
+                const paymentModal = document.getElementById('payment-modal');
+                const settingsModal = document.getElementById('settings-modal');
+                const clearOrderModal = document.getElementById('clear-order-modal');
+
+                // Check if any modal is open
+                const isModalOpen = (paymentModal && !paymentModal.classList.contains('hidden')) ||
+                                   (settingsModal && !settingsModal.classList.contains('hidden')) ||
+                                   (clearOrderModal && !clearOrderModal.classList.contains('hidden'));
+
+                // Check if user is already typing in an input field
+                const isTypingInInput = document.activeElement.tagName === 'INPUT' ||
+                                       document.activeElement.tagName === 'TEXTAREA';
+
+                // Check if currently focused on the search input specifically
+                const isFocusedOnSearch = document.activeElement === searchInput;
+
+                // If focused on search input, allow all normal keyboard behavior
+                if (isFocusedOnSearch) {
+                    return; // Let browser handle everything normally
+                }
+
+                // If focused on OTHER inputs (like payment modal), don't interfere
+                if (isTypingInInput && !isFocusedOnSearch) {
+                    return;
+                }
+
+                // Only capture if: not in modal, not already typing in other inputs
+                if (!isModalOpen && !isTypingInInput && searchInput) {
+                    // Exclude special navigation keys
+                    const excludeKeys = ['Enter', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+
+                    // For printable characters, focus the search
+                    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && !excludeKeys.includes(e.key)) {
+                        searchInput.focus();
+                        // Let the default behavior add the character to the input
+                    }
+                    // For Backspace or Delete, only focus if search has content
+                    else if ((e.key === 'Backspace' || e.key === 'Delete') && searchInput.value.length > 0) {
+                        searchInput.focus();
+                        // Let the browser handle the deletion naturally after focus
                     }
                 }
             });

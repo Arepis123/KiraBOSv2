@@ -31,7 +31,14 @@
       "Bash(dir uploads\\products)",
       "Bash(start http://localhost/KiraBOSv2/test_image_upload.php)",
       "Bash(start http://localhost/KiraBOSv2/setup_stock_management.php)",
-      "Bash(start http://localhost/KiraBOSv2/debug_product_23.php)"
+      "Bash(start http://localhost/KiraBOSv2/debug_product_23.php)",
+      "Bash(dir:*)",
+      "WebFetch(domain:lucide.dev)",
+      "Bash(start http://localhost/KiraBOSv2/admin.php?page=logs)",
+      "Bash(start http://localhost/KiraBOSv2/test_menu_logging.php)",
+      "Bash(start http://localhost/KiraBOSv2/debug_activity_logs.php)",
+      "Bash(start http://localhost/KiraBOSv2/run_add_view_menu.php)",
+      "Bash(del:*)"
     ],
     "deny": [],
     "ask": []
