@@ -3,9 +3,35 @@
 // Determine which submenu is active
 $log_view = $_GET['log_view'] ?? 'activity';
 
-// Get initial batch of activity logs for the current restaurant (only first 10)
-$logs = ActivityLogger::getRecentLogs($restaurant_id, 10, 0);
-$total_logs = ActivityLogger::getLogsCount($restaurant_id);
+// Get activity logs with pagination
+// Exclude view_menu logs as they have their own tab
+$db = Database::getInstance()->getConnection();
+$current_page = isset($_GET['log_page']) ? max(1, (int)$_GET['log_page']) : 1;
+$logs_per_page = 10;
+$offset = ($current_page - 1) * $logs_per_page;
+
+$logs_query = "SELECT al.*, u.username
+               FROM activity_logs al
+               LEFT JOIN users u ON al.user_id = u.id
+               WHERE al.restaurant_id = :restaurant_id
+               AND al.action_type != 'view_menu'
+               ORDER BY al.created_at DESC
+               LIMIT :limit OFFSET :offset";
+$logs_stmt = $db->prepare($logs_query);
+$logs_stmt->bindParam(':restaurant_id', $restaurant_id);
+$logs_stmt->bindValue(':limit', $logs_per_page, PDO::PARAM_INT);
+$logs_stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+$logs_stmt->execute();
+$logs = $logs_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get total count excluding view_menu
+$count_query = "SELECT COUNT(*) FROM activity_logs
+                WHERE restaurant_id = :restaurant_id
+                AND action_type != 'view_menu'";
+$count_stmt = $db->prepare($count_query);
+$count_stmt->bindParam(':restaurant_id', $restaurant_id);
+$count_stmt->execute();
+$total_logs = $count_stmt->fetchColumn();
 
 // Get unique users for filter
 $users_query = "SELECT id, username FROM users WHERE restaurant_id = :restaurant_id ORDER BY username";
@@ -15,7 +41,7 @@ $users_stmt->execute();
 $users = $users_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Action type options
-$action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'disable', 'view_menu'];
+$action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'disable'];
 ?>
 
 <div class="space-y-6">
@@ -40,6 +66,20 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
             Menu Views
         </a>
     </div>
+
+    <style>
+    /* Ensure responsive display works correctly */
+    @media (min-width: 768px) {
+        #desktopTableView, #orderTableView, #menuViewTableView {
+            display: block !important;
+        }
+    }
+    @media (max-width: 767px) {
+        #desktopTableView, #orderTableView, #menuViewTableView {
+            display: none !important;
+        }
+    }
+    </style>
 
     <script>
     // Reinitialize Lucide icons for this page
@@ -83,27 +123,28 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
     </div>
 
     <!-- Activity Logs -->
-    <div class="theme-transition rounded-xl shadow-sm border p-6" style="background: var(--bg-card); border-color: var(--border-primary)">
-        <div class="flex justify-between items-center mb-6">
+    <div class="theme-transition rounded-xl shadow-sm border p-4 sm:p-6" style="background: var(--bg-card); border-color: var(--border-primary)">
+        <!-- Header and Filters -->
+        <div class="flex flex-col space-y-4 mb-6 md:flex-row md:justify-between md:items-center md:space-y-0">
             <h2 class="text-xl font-bold theme-header">Activity Logs</h2>
-            
+
             <!-- Filters -->
-            <div class="flex space-x-3">
-                <select id="actionFilter" class="px-3 py-2 text-sm rounded-lg theme-transition" style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)">
+            <div class="flex flex-col space-y-2 sm:flex-row sm:space-y-0 sm:space-x-3">
+                <select id="actionFilter" class="px-3 py-2 text-sm rounded-lg theme-transition w-full sm:w-auto" style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)">
                     <option value="">All Actions</option>
                     <?php foreach ($action_types as $type): ?>
                         <option value="<?= $type ?>"><?= ucfirst($type) ?></option>
                     <?php endforeach; ?>
                 </select>
-                
-                <select id="userFilter" class="px-3 py-2 text-sm rounded-lg theme-transition" style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)">
+
+                <select id="userFilter" class="px-3 py-2 text-sm rounded-lg theme-transition w-full sm:w-auto" style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)">
                     <option value="">All Users</option>
                     <?php foreach ($users as $user): ?>
                         <option value="<?= $user['id'] ?>"><?= htmlspecialchars($user['username']) ?></option>
                     <?php endforeach; ?>
                 </select>
-                
-                <button onclick="clearFilters()" class="px-4 py-2 text-sm rounded-lg transition-colors text-white" style="background: var(--accent-primary)" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+
+                <button onclick="clearFilters()" class="px-4 py-2 text-sm rounded-lg transition-colors text-white w-full sm:w-auto" style="background: var(--accent-primary)" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
                     Clear Filters
                 </button>
             </div>
@@ -116,119 +157,348 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
                 <p class="text-sm" style="color: var(--text-secondary)">Activity logs will appear here as users interact with the system</p>
             </div>
         <?php else: ?>
-            <div class="space-y-3" id="logsContainer">
+            <!-- Mobile: Card View -->
+            <div class="space-y-3 md:hidden">
                 <?php foreach ($logs as $log): ?>
-                    <div class="log-item flex items-start space-x-4 p-4 rounded-lg transition-colors hover:bg-gray-50" 
+                    <div class="log-item rounded-lg p-4 transition-colors"
                          style="border: 1px solid var(--border-primary); background: var(--bg-secondary)"
-                         data-action="<?= $log['action_type'] ?>" 
+                         data-action="<?= $log['action_type'] ?>"
                          data-user="<?= $log['user_id'] ?>"
                          data-date="<?= date('Y-m-d', strtotime($log['created_at'])) ?>">
-                        
-                        <!-- Action Icon -->
-                        <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold
-                            <?php 
-                                switch($log['action_type']) {
-                                    case 'create': echo 'bg-green-500'; break;
-                                    case 'update': echo 'bg-blue-500'; break;
-                                    case 'delete': echo 'bg-red-500'; break;
-                                    case 'login': echo 'bg-purple-500'; break;
-                                    case 'logout': echo 'bg-gray-500'; break;
-                                    case 'enable': echo 'bg-emerald-500'; break;
-                                    case 'disable': echo 'bg-orange-500'; break;
-                                    default: echo 'bg-gray-400';
-                                }
-                            ?>">
-                            <?php 
-                                switch($log['action_type']) {
-                                    case 'create': echo '➕'; break;
-                                    case 'update': echo '✏️'; break;
-                                    case 'delete': echo '🗑️'; break;
-                                    case 'login': echo '🔐'; break;
-                                    case 'logout': echo '🚪'; break;
-                                    case 'enable': echo '✅'; break;
-                                    case 'disable': echo '❌'; break;
-                                    default: echo '📝';
-                                }
-                            ?>
+
+                        <div class="flex items-start justify-between mb-3">
+                            <span class="inline-flex items-center text-xs px-2.5 py-1 rounded-md font-medium
+                                <?php
+                                    switch($log['action_type']) {
+                                        case 'create': echo 'bg-green-100 text-green-800'; break;
+                                        case 'update': echo 'bg-blue-100 text-blue-800'; break;
+                                        case 'delete': echo 'bg-red-100 text-red-800'; break;
+                                        case 'login': case 'logout': echo 'bg-purple-100 text-purple-800'; break;
+                                        case 'enable': echo 'bg-emerald-100 text-emerald-800'; break;
+                                        case 'disable': echo 'bg-orange-100 text-orange-800'; break;
+                                        default: echo 'bg-gray-100 text-gray-800';
+                                    }
+                                ?>">
+                                <?= ucfirst($log['action_type']) ?>
+                            </span>
                         </div>
-                        
-                        <!-- Log Details -->
-                        <div class="flex-grow min-w-0">
-                            <div class="flex items-center justify-between mb-1">
-                                <h4 class="font-medium truncate" style="color: var(--text-primary)">
-                                    <?= htmlspecialchars($log['description']) ?>
-                                </h4>
-                                <span class="text-xs px-2 py-1 rounded-full font-medium
-                                    <?php 
-                                        switch($log['action_type']) {
-                                            case 'create': echo 'bg-green-100 text-green-800'; break;
-                                            case 'update': echo 'bg-blue-100 text-blue-800'; break;
-                                            case 'delete': echo 'bg-red-100 text-red-800'; break;
-                                            case 'login': case 'logout': echo 'bg-purple-100 text-purple-800'; break;
-                                            case 'enable': echo 'bg-emerald-100 text-emerald-800'; break;
-                                            case 'disable': echo 'bg-orange-100 text-orange-800'; break;
-                                            default: echo 'bg-gray-100 text-gray-800';
-                                        }
-                                    ?>">
-                                    <?= ucfirst($log['action_type']) ?>
-                                </span>
+
+                        <h4 class="font-medium mb-2" style="color: var(--text-primary)">
+                            <?= htmlspecialchars($log['description']) ?>
+                        </h4>
+
+                        <div class="space-y-1 text-sm" style="color: var(--text-secondary)">
+                            <div class="flex items-center">
+                                <span class="w-20 font-medium">User:</span>
+                                <span><?= htmlspecialchars($log['username'] ?? 'System') ?></span>
                             </div>
-                            
-                            <div class="flex items-center text-sm space-x-4" style="color: var(--text-secondary)">
-                                <span>👤 <?= htmlspecialchars($log['username'] ?? 'System') ?></span>
-                                <span>🕐 <?= date('M j, Y g:i A', strtotime($log['created_at'])) ?></span>
-                                <?php if ($log['table_name']): ?>
-                                    <span>📋 <?= ucfirst($log['table_name']) ?></span>
-                                <?php endif; ?>
-                                <?php if ($log['ip_address']): ?>
-                                    <span>🌐 <?= htmlspecialchars($log['ip_address']) ?></span>
-                                <?php endif; ?>
+                            <?php if ($log['table_name']): ?>
+                                <div class="flex items-center">
+                                    <span class="w-20 font-medium">Table:</span>
+                                    <span><?= ucfirst($log['table_name']) ?></span>
+                                </div>
+                            <?php endif; ?>
+                            <div class="flex items-center">
+                                <span class="w-20 font-medium">Date:</span>
+                                <span><?= date('M j, Y g:i A', strtotime($log['created_at'])) ?></span>
                             </div>
-                            
-                            <!-- Show changes if available -->
-                            <?php if ($log['old_values'] || $log['new_values']): ?>
-                                <button onclick="toggleDetails(<?= $log['id'] ?>)" 
-                                        class="text-xs text-blue-600 hover:text-blue-800 mt-2 font-medium">
-                                    View Changes
-                                </button>
-                                <div id="details-<?= $log['id'] ?>" class="hidden mt-3 p-3 rounded-lg bg-gray-100">
-                                    <?php if ($log['old_values']): ?>
-                                        <div class="mb-2">
-                                            <strong class="text-xs text-red-600">Previous Values:</strong>
-                                            <pre class="text-xs mt-1 text-gray-600"><?= htmlspecialchars(json_encode(json_decode($log['old_values']), JSON_PRETTY_PRINT)) ?></pre>
-                                        </div>
-                                    <?php endif; ?>
-                                    <?php if ($log['new_values']): ?>
-                                        <div>
-                                            <strong class="text-xs text-green-600">New Values:</strong>
-                                            <pre class="text-xs mt-1 text-gray-600"><?= htmlspecialchars(json_encode(json_decode($log['new_values']), JSON_PRETTY_PRINT)) ?></pre>
-                                        </div>
-                                    <?php endif; ?>
+                            <?php if ($log['ip_address']): ?>
+                                <div class="flex items-center">
+                                    <span class="w-20 font-medium">IP:</span>
+                                    <span><?= htmlspecialchars($log['ip_address']) ?></span>
                                 </div>
                             <?php endif; ?>
                         </div>
+
+                        <?php if ($log['old_values'] || $log['new_values']): ?>
+                            <button onclick="toggleDetails(<?= $log['id'] ?>)"
+                                    class="mt-3 text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50">
+                                View Changes
+                            </button>
+                            <div id="details-mobile-<?= $log['id'] ?>" class="hidden mt-3 p-3 rounded-lg bg-gray-100">
+                                <?php if ($log['old_values']): ?>
+                                    <div class="mb-2">
+                                        <strong class="text-xs text-red-600">Previous Values:</strong>
+                                        <pre class="text-xs mt-1 text-gray-600 overflow-x-auto"><?= htmlspecialchars(json_encode(json_decode($log['old_values']), JSON_PRETTY_PRINT)) ?></pre>
+                                    </div>
+                                <?php endif; ?>
+                                <?php if ($log['new_values']): ?>
+                                    <div>
+                                        <strong class="text-xs text-green-600">New Values:</strong>
+                                        <pre class="text-xs mt-1 text-gray-600 overflow-x-auto"><?= htmlspecialchars(json_encode(json_decode($log['new_values']), JSON_PRETTY_PRINT)) ?></pre>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 <?php endforeach; ?>
             </div>
-        <?php endif; ?>
-        
-        <!-- Load More Button -->
-        <?php if ($total_logs > 10): ?>
-            <div class="text-center mt-6">
-                <button id="loadMoreBtn" onclick="loadMoreLogs()" 
-                        class="px-6 py-3 rounded-lg transition-colors text-white font-medium" 
-                        style="background: var(--accent-primary)" 
-                        onmouseover="this.style.opacity='0.9'" 
-                        onmouseout="this.style.opacity='1'">
-                    Load More Logs (<span id="remainingCount"><?= $total_logs - 10 ?></span> remaining)
-                </button>
-                <div id="loadingSpinner" class="hidden mt-4">
-                    <div class="flex justify-center items-center">
-                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-                        <span class="ml-3 text-sm" style="color: var(--text-secondary)">Loading more logs...</span>
+
+            <!-- Desktop: Table View -->
+            <div class="block overflow-x-auto" id="desktopTableView">
+                <table class="w-full" id="logsContainer">
+                    <thead>
+                        <tr style="border-bottom: 2px solid var(--border-primary)">
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Action</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Description</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">User</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Table</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Date & Time</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">IP Address</th>
+                            <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Changes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($logs as $log): ?>
+                            <tr class="log-item transition-colors"
+                                style="border-bottom: 1px solid var(--border-primary)"
+                                data-action="<?= $log['action_type'] ?>"
+                                data-user="<?= $log['user_id'] ?>"
+                                data-date="<?= date('Y-m-d', strtotime($log['created_at'])) ?>"
+                                onmouseover="this.style.background='var(--bg-secondary)'; this.style.opacity='0.8'"
+                                onmouseout="this.style.background='transparent'; this.style.opacity='1'">
+
+                                <!-- Action Badge -->
+                                <td class="px-4 py-3">
+                                    <span class="inline-flex items-center text-xs px-2.5 py-1 rounded-md font-medium
+                                        <?php
+                                            switch($log['action_type']) {
+                                                case 'create': echo 'bg-green-100 text-green-800'; break;
+                                                case 'update': echo 'bg-blue-100 text-blue-800'; break;
+                                                case 'delete': echo 'bg-red-100 text-red-800'; break;
+                                                case 'login': case 'logout': echo 'bg-purple-100 text-purple-800'; break;
+                                                case 'enable': echo 'bg-emerald-100 text-emerald-800'; break;
+                                                case 'disable': echo 'bg-orange-100 text-orange-800'; break;
+                                                default: echo 'bg-gray-100 text-gray-800';
+                                            }
+                                        ?>">
+                                        <?= ucfirst($log['action_type']) ?>
+                                    </span>
+                                </td>
+
+                                <!-- Description -->
+                                <td class="px-4 py-3 font-medium" style="color: var(--text-primary)">
+                                    <?= htmlspecialchars($log['description']) ?>
+                                </td>
+
+                                <!-- User -->
+                                <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                                    <?= htmlspecialchars($log['username'] ?? 'System') ?>
+                                </td>
+
+                                <!-- Table -->
+                                <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                                    <?= $log['table_name'] ? ucfirst($log['table_name']) : '-' ?>
+                                </td>
+
+                                <!-- Date & Time -->
+                                <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--text-secondary)">
+                                    <?= date('M j, Y g:i A', strtotime($log['created_at'])) ?>
+                                </td>
+
+                                <!-- IP Address -->
+                                <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                                    <?= $log['ip_address'] ? htmlspecialchars($log['ip_address']) : '-' ?>
+                                </td>
+
+                                <!-- Changes Button -->
+                                <td class="px-4 py-3 text-center">
+                                    <?php if ($log['old_values'] || $log['new_values']): ?>
+                                        <button onclick="toggleDetails(<?= $log['id'] ?>)"
+                                                class="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50">
+                                            View
+                                        </button>
+                                    <?php else: ?>
+                                        <span class="text-xs" style="color: var(--text-secondary)">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+
+                            <!-- Changes Details Row (Hidden by default) -->
+                            <?php if ($log['old_values'] || $log['new_values']): ?>
+                                <tr id="details-<?= $log['id'] ?>" class="hidden" style="background: var(--bg-secondary)">
+                                    <td colspan="7" class="px-4 py-3">
+                                        <div class="p-3 rounded-lg bg-gray-100">
+                                            <?php if ($log['old_values']): ?>
+                                                <div class="mb-2">
+                                                    <strong class="text-xs text-red-600">Previous Values:</strong>
+                                                    <pre class="text-xs mt-1 text-gray-600 overflow-x-auto"><?= htmlspecialchars(json_encode(json_decode($log['old_values']), JSON_PRETTY_PRINT)) ?></pre>
+                                                </div>
+                                            <?php endif; ?>
+                                            <?php if ($log['new_values']): ?>
+                                                <div>
+                                                    <strong class="text-xs text-green-600">New Values:</strong>
+                                                    <pre class="text-xs mt-1 text-gray-600 overflow-x-auto"><?= htmlspecialchars(json_encode(json_decode($log['new_values']), JSON_PRETTY_PRINT)) ?></pre>
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endif; ?>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <?php if ($total_logs > 10): ?>
+            <?php
+            $current_page = isset($_GET['log_page']) ? max(1, (int)$_GET['log_page']) : 1;
+            $logs_per_page = 10;
+            $total_pages = ceil($total_logs / $logs_per_page);
+            ?>
+            <div class="flex flex-col md:flex-row items-center justify-between px-2 sm:px-4 py-3 sm:px-6 mt-4 gap-4" style="border-top: 1px solid var(--border-primary)">
+                <!-- Mobile: Previous/Next -->
+                <div class="flex flex-1 justify-between md:hidden w-full">
+                    <?php if ($current_page > 1): ?>
+                        <a href="admin.php?page=logs&log_view=activity&log_page=<?= $current_page - 1 ?>"
+                           class="relative inline-flex items-center rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                           style="border: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                           onmouseover="this.style.background='var(--bg-secondary)'"
+                           onmouseout="this.style.background='var(--bg-card)'">
+                            Previous
+                        </a>
+                    <?php else: ?>
+                        <span class="relative inline-flex items-center rounded-md px-4 py-2 text-sm font-medium"
+                              style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">
+                            Previous
+                        </span>
+                    <?php endif; ?>
+
+                    <?php if ($current_page < $total_pages): ?>
+                        <a href="admin.php?page=logs&log_view=activity&log_page=<?= $current_page + 1 ?>"
+                           class="relative ml-3 inline-flex items-center rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                           style="border: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                           onmouseover="this.style.background='var(--bg-secondary)'"
+                           onmouseout="this.style.background='var(--bg-card)'">
+                            Next
+                        </a>
+                    <?php else: ?>
+                        <span class="relative ml-3 inline-flex items-center rounded-md px-4 py-2 text-sm font-medium"
+                              style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">
+                            Next
+                        </span>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Desktop: Full Pagination -->
+                <div class="flex md:flex-1 md:items-center md:justify-between w-full">
+                    <div>
+                        <p class="text-sm" style="color: var(--text-secondary)">
+                            Showing
+                            <span class="font-medium" style="color: var(--text-primary)"><?= (($current_page - 1) * $logs_per_page) + 1 ?></span>
+                            to
+                            <span class="font-medium" style="color: var(--text-primary)"><?= min($current_page * $logs_per_page, $total_logs) ?></span>
+                            of
+                            <span class="font-medium" style="color: var(--text-primary)"><?= $total_logs ?></span>
+                            results
+                        </p>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <nav class="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+                            <!-- Previous Button -->
+                            <?php if ($current_page > 1): ?>
+                                <a href="admin.php?page=logs&log_view=activity&log_page=<?= $current_page - 1 ?>"
+                                   class="relative inline-flex items-center rounded-l-md px-2 py-2 transition-colors"
+                                   style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)"
+                                   onmouseover="this.style.background='var(--bg-secondary)'"
+                                   onmouseout="this.style.background='var(--bg-card)'">
+                                    <span class="sr-only">Previous</span>
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path fill-rule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clip-rule="evenodd" />
+                                    </svg>
+                                </a>
+                            <?php else: ?>
+                                <span class="relative inline-flex items-center rounded-l-md px-2 py-2"
+                                      style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path fill-rule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clip-rule="evenodd" />
+                                    </svg>
+                                </span>
+                            <?php endif; ?>
+
+                            <!-- Page Numbers -->
+                            <?php
+                            $start_page = max(1, $current_page - 2);
+                            $end_page = min($total_pages, $current_page + 2);
+
+                            // Show first page if not in range
+                            if ($start_page > 1): ?>
+                                <a href="admin.php?page=logs&log_view=activity&log_page=1"
+                                   class="relative inline-flex items-center px-4 py-2 text-sm font-semibold transition-colors"
+                                   style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                                   onmouseover="this.style.background='var(--bg-secondary)'"
+                                   onmouseout="this.style.background='var(--bg-card)'">
+                                    1
+                                </a>
+                                <?php if ($start_page > 2): ?>
+                                    <span class="relative inline-flex items-center px-4 py-2 text-sm font-semibold"
+                                          style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)">
+                                        ...
+                                    </span>
+                                <?php endif; ?>
+                            <?php endif; ?>
+
+                            <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
+                                <?php if ($i === $current_page): ?>
+                                    <span aria-current="page"
+                                          class="relative z-10 inline-flex items-center px-4 py-2 text-sm font-semibold text-white"
+                                          style="background: var(--accent-primary); border: 1px solid var(--accent-primary)">
+                                        <?= $i ?>
+                                    </span>
+                                <?php else: ?>
+                                    <a href="admin.php?page=logs&log_view=activity&log_page=<?= $i ?>"
+                                       class="relative inline-flex items-center px-4 py-2 text-sm font-semibold transition-colors"
+                                       style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                                       onmouseover="this.style.background='var(--bg-secondary)'"
+                                       onmouseout="this.style.background='var(--bg-card)'">
+                                        <?= $i ?>
+                                    </a>
+                                <?php endif; ?>
+                            <?php endfor; ?>
+
+                            <!-- Show last page if not in range -->
+                            <?php if ($end_page < $total_pages): ?>
+                                <?php if ($end_page < $total_pages - 1): ?>
+                                    <span class="relative inline-flex items-center px-4 py-2 text-sm font-semibold"
+                                          style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)">
+                                        ...
+                                    </span>
+                                <?php endif; ?>
+                                <a href="admin.php?page=logs&log_view=activity&log_page=<?= $total_pages ?>"
+                                   class="relative inline-flex items-center px-4 py-2 text-sm font-semibold transition-colors"
+                                   style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                                   onmouseover="this.style.background='var(--bg-secondary)'"
+                                   onmouseout="this.style.background='var(--bg-card)'">
+                                    <?= $total_pages ?>
+                                </a>
+                            <?php endif; ?>
+
+                            <!-- Next Button -->
+                            <?php if ($current_page < $total_pages): ?>
+                                <a href="admin.php?page=logs&log_view=activity&log_page=<?= $current_page + 1 ?>"
+                                   class="relative inline-flex items-center rounded-r-md px-2 py-2 transition-colors"
+                                   style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)"
+                                   onmouseover="this.style.background='var(--bg-secondary)'"
+                                   onmouseout="this.style.background='var(--bg-card)'">
+                                    <span class="sr-only">Next</span>
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
+                                    </svg>
+                                </a>
+                            <?php else: ?>
+                                <span class="relative inline-flex items-center rounded-r-md px-2 py-2"
+                                      style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
+                                    </svg>
+                                </span>
+                            <?php endif; ?>
+                        </nav>
                     </div>
                 </div>
             </div>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
 
@@ -261,7 +531,21 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
 
     $order_where = implode(' AND ', $order_conditions);
 
-    // Get order activity logs with filters
+    // Pagination for orders
+    $order_current_page = isset($_GET['order_page']) ? max(1, (int)$_GET['order_page']) : 1;
+    $orders_per_page = 10;
+    $order_offset = ($order_current_page - 1) * $orders_per_page;
+
+    // Get total count for pagination
+    $order_count_query = "SELECT COUNT(*) FROM orders o WHERE {$order_where}";
+    $order_count_stmt = $db->prepare($order_count_query);
+    foreach ($order_params as $key => $value) {
+        $order_count_stmt->bindValue($key, $value);
+    }
+    $order_count_stmt->execute();
+    $total_orders = $order_count_stmt->fetchColumn();
+
+    // Get order activity logs with filters and pagination
     $order_logs_query = "SELECT o.*, u.username,
                          (SELECT GROUP_CONCAT(CONCAT(oi.product_name, ' x', oi.quantity) SEPARATOR ', ')
                           FROM order_items oi WHERE oi.order_id = o.id) as items
@@ -269,11 +553,13 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
                          LEFT JOIN users u ON o.user_id = u.id
                          WHERE {$order_where}
                          ORDER BY o.created_at DESC
-                         LIMIT 100";
+                         LIMIT :limit OFFSET :offset";
     $order_logs_stmt = $db->prepare($order_logs_query);
     foreach ($order_params as $key => $value) {
         $order_logs_stmt->bindValue($key, $value);
     }
+    $order_logs_stmt->bindValue(':limit', $orders_per_page, PDO::PARAM_INT);
+    $order_logs_stmt->bindValue(':offset', $order_offset, PDO::PARAM_INT);
     $order_logs_stmt->execute();
     $order_logs = $order_logs_stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -282,13 +568,14 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
     $payment_methods = ['cash', 'qr_code', 'card'];
     ?>
 
-    <div class="theme-transition rounded-xl shadow-sm border p-6" style="background: var(--bg-card); border-color: var(--border-primary)">
-        <div class="flex justify-between items-center mb-6">
+    <div class="theme-transition rounded-xl shadow-sm border p-4 sm:p-6" style="background: var(--bg-card); border-color: var(--border-primary)">
+        <!-- Header and Filters -->
+        <div class="flex flex-col space-y-4 mb-6 md:flex-row md:justify-between md:items-center md:space-y-0">
             <h2 class="text-xl font-bold theme-header">Order Activity Log</h2>
 
             <!-- Filters -->
-            <div class="flex space-x-3">
-                <select id="orderUserFilter" class="px-3 py-2 text-sm rounded-lg theme-transition" style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)"
+            <div class="flex flex-col space-y-2 sm:flex-row sm:space-y-0 sm:space-x-3">
+                <select id="orderUserFilter" class="px-3 py-2 text-sm rounded-lg theme-transition w-full sm:w-auto" style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)"
                         onchange="applyOrderLogsFilters()">
                     <option value="">All Cashiers</option>
                     <?php foreach ($users as $user): ?>
@@ -298,12 +585,12 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
                     <?php endforeach; ?>
                 </select>
 
-                <input type="date" id="orderDateFilter" class="px-3 py-2 text-sm rounded-lg theme-transition"
+                <input type="date" id="orderDateFilter" class="px-3 py-2 text-sm rounded-lg theme-transition w-full sm:w-auto"
                        style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)"
                        value="<?= htmlspecialchars($filter_date ?? '') ?>"
                        onchange="applyOrderLogsFilters()">
 
-                <select id="orderPaymentFilter" class="px-3 py-2 text-sm rounded-lg theme-transition" style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)"
+                <select id="orderPaymentFilter" class="px-3 py-2 text-sm rounded-lg theme-transition w-full sm:w-auto" style="border: 1px solid var(--border-primary); background: var(--bg-card); color: var(--text-primary)"
                         onchange="applyOrderLogsFilters()">
                     <option value="">All Payment Types</option>
                     <?php foreach ($payment_methods as $method): ?>
@@ -313,7 +600,7 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
                     <?php endforeach; ?>
                 </select>
 
-                <button onclick="clearOrderLogsFilters()" class="px-4 py-2 text-sm rounded-lg transition-colors text-white" style="background: var(--accent-primary)" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+                <button onclick="clearOrderLogsFilters()" class="px-4 py-2 text-sm rounded-lg transition-colors text-white w-full sm:w-auto" style="background: var(--accent-primary)" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
                     Clear Filters
                 </button>
             </div>
@@ -326,34 +613,46 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
                 <p class="text-sm" style="color: var(--text-secondary)">Order history will appear here</p>
             </div>
         <?php else: ?>
-            <div class="space-y-3">
+            <!-- Mobile: Card View -->
+            <div class="space-y-3 md:hidden">
                 <?php foreach ($order_logs as $order): ?>
-                    <div class="flex items-start space-x-4 p-4 rounded-lg transition-colors hover:bg-gray-50"
+                    <div class="rounded-lg p-4 transition-colors"
                          style="border: 1px solid var(--border-primary); background: var(--bg-secondary)">
 
-                        <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-white bg-green-500">
-                            🛒
-                        </div>
-
-                        <div class="flex-grow">
-                            <div class="flex items-center justify-between mb-1">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center space-x-3">
+                                <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-white bg-green-500">
+                                    🛒
+                                </div>
                                 <h4 class="font-medium" style="color: var(--text-primary)">
                                     Order #<?= htmlspecialchars($order['order_number']) ?>
                                 </h4>
-                                <span class="text-sm font-bold" style="color: var(--accent-primary)">
-                                    MYR <?= number_format($order['total_amount'], 2) ?>
-                                </span>
                             </div>
+                            <span class="text-sm font-bold" style="color: var(--accent-primary)">
+                                MYR <?= number_format($order['total_amount'], 2) ?>
+                            </span>
+                        </div>
 
-                            <div class="text-sm mb-2" style="color: var(--text-secondary)">
-                                <?= htmlspecialchars($order['items']) ?>
+                        <div class="text-sm mb-3" style="color: var(--text-secondary)">
+                            <?= htmlspecialchars($order['items']) ?>
+                        </div>
+
+                        <div class="space-y-1 text-sm" style="color: var(--text-secondary)">
+                            <div class="flex items-center">
+                                <span class="w-24 font-medium">Cashier:</span>
+                                <span><?= htmlspecialchars($order['username'] ?? 'Unknown') ?></span>
                             </div>
-
-                            <div class="flex items-center text-xs space-x-4" style="color: var(--text-secondary)">
-                                <span>👤 <?= htmlspecialchars($order['username'] ?? 'Unknown') ?></span>
-                                <span>🕐 <?= date('M j, Y g:i A', strtotime($order['created_at'])) ?></span>
-                                <span>💳 <?= ucfirst($order['payment_method']) ?></span>
-                                <span class="px-2 py-1 rounded-full bg-green-100 text-green-800">
+                            <div class="flex items-center">
+                                <span class="w-24 font-medium">Date:</span>
+                                <span><?= date('M j, Y g:i A', strtotime($order['created_at'])) ?></span>
+                            </div>
+                            <div class="flex items-center">
+                                <span class="w-24 font-medium">Payment:</span>
+                                <span><?= ucfirst(str_replace('_', ' ', $order['payment_method'])) ?></span>
+                            </div>
+                            <div class="flex items-center">
+                                <span class="w-24 font-medium">Status:</span>
+                                <span class="px-2 py-1 rounded-full bg-green-100 text-green-800 text-xs">
                                     <?= ucfirst($order['status']) ?>
                                 </span>
                             </div>
@@ -361,18 +660,313 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
                     </div>
                 <?php endforeach; ?>
             </div>
+
+            <!-- Desktop: Table View -->
+            <div class="hidden md:block overflow-x-auto" id="orderTableView">
+                <table class="w-full">
+                    <thead>
+                        <tr style="border-bottom: 2px solid var(--border-primary)">
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Order #</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Items</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Cashier</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Date & Time</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Payment</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Status</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($order_logs as $order): ?>
+                            <tr class="transition-colors"
+                                style="border-bottom: 1px solid var(--border-primary)"
+                                onmouseover="this.style.background='var(--bg-secondary)'; this.style.opacity='0.8'"
+                                onmouseout="this.style.background='transparent'; this.style.opacity='1'">
+
+                                <td class="px-4 py-3 font-medium" style="color: var(--text-primary)">
+                                    #<?= htmlspecialchars($order['order_number']) ?>
+                                </td>
+
+                                <td class="px-4 py-3 text-sm max-w-xs truncate" style="color: var(--text-secondary)">
+                                    <?= htmlspecialchars($order['items']) ?>
+                                </td>
+
+                                <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                                    <?= htmlspecialchars($order['username'] ?? 'Unknown') ?>
+                                </td>
+
+                                <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--text-secondary)">
+                                    <?= date('M j, Y g:i A', strtotime($order['created_at'])) ?>
+                                </td>
+
+                                <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                                    <?= ucfirst(str_replace('_', ' ', $order['payment_method'])) ?>
+                                </td>
+
+                                <td class="px-4 py-3">
+                                    <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                        <?= ucfirst($order['status']) ?>
+                                    </span>
+                                </td>
+
+                                <td class="px-4 py-3 text-right font-bold" style="color: var(--accent-primary)">
+                                    MYR <?= number_format($order['total_amount'], 2) ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination for Orders -->
+            <?php if ($total_orders > 10): ?>
+            <?php
+            $order_total_pages = ceil($total_orders / $orders_per_page);
+            $base_url = "admin.php?page=logs&log_view=orders";
+            if ($filter_user) $base_url .= "&filter_user={$filter_user}";
+            if ($filter_date) $base_url .= "&filter_date={$filter_date}";
+            if ($filter_payment) $base_url .= "&filter_payment={$filter_payment}";
+            ?>
+            <div class="flex flex-col md:flex-row items-center justify-between px-2 sm:px-4 py-3 sm:px-6 mt-4 gap-4" style="border-top: 1px solid var(--border-primary)">
+                <!-- Mobile: Previous/Next -->
+                <div class="flex flex-1 justify-between md:hidden w-full">
+                    <?php if ($order_current_page > 1): ?>
+                        <a href="<?= $base_url ?>&order_page=<?= $order_current_page - 1 ?>"
+                           class="relative inline-flex items-center rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                           style="border: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                           onmouseover="this.style.background='var(--bg-secondary)'"
+                           onmouseout="this.style.background='var(--bg-card)'">
+                            Previous
+                        </a>
+                    <?php else: ?>
+                        <span class="relative inline-flex items-center rounded-md px-4 py-2 text-sm font-medium"
+                              style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">
+                            Previous
+                        </span>
+                    <?php endif; ?>
+
+                    <?php if ($order_current_page < $order_total_pages): ?>
+                        <a href="<?= $base_url ?>&order_page=<?= $order_current_page + 1 ?>"
+                           class="relative ml-3 inline-flex items-center rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                           style="border: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                           onmouseover="this.style.background='var(--bg-secondary)'"
+                           onmouseout="this.style.background='var(--bg-card)'">
+                            Next
+                        </a>
+                    <?php else: ?>
+                        <span class="relative ml-3 inline-flex items-center rounded-md px-4 py-2 text-sm font-medium"
+                              style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">
+                            Next
+                        </span>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Desktop: Full Pagination -->
+                <div class="flex md:flex-1 md:items-center md:justify-between w-full">
+                    <div>
+                        <p class="text-sm" style="color: var(--text-secondary)">
+                            Showing
+                            <span class="font-medium" style="color: var(--text-primary)"><?= (($order_current_page - 1) * $orders_per_page) + 1 ?></span>
+                            to
+                            <span class="font-medium" style="color: var(--text-primary)"><?= min($order_current_page * $orders_per_page, $total_orders) ?></span>
+                            of
+                            <span class="font-medium" style="color: var(--text-primary)"><?= $total_orders ?></span>
+                            results
+                        </p>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <nav class="isolate inline-flex -space-x-px rounded-md shadow-sm" aria-label="Pagination">
+                            <!-- Previous Button -->
+                            <?php if ($order_current_page > 1): ?>
+                                <a href="<?= $base_url ?>&order_page=<?= $order_current_page - 1 ?>"
+                                   class="relative inline-flex items-center rounded-l-md px-2 py-2 transition-colors"
+                                   style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)"
+                                   onmouseover="this.style.background='var(--bg-secondary)'"
+                                   onmouseout="this.style.background='var(--bg-card)'">
+                                    <span class="sr-only">Previous</span>
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clip-rule="evenodd" />
+                                    </svg>
+                                </a>
+                            <?php else: ?>
+                                <span class="relative inline-flex items-center rounded-l-md px-2 py-2"
+                                      style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clip-rule="evenodd" />
+                                    </svg>
+                                </span>
+                            <?php endif; ?>
+
+                            <!-- Page Numbers -->
+                            <?php
+                            $start_page = max(1, $order_current_page - 2);
+                            $end_page = min($order_total_pages, $order_current_page + 2);
+
+                            if ($start_page > 1): ?>
+                                <a href="<?= $base_url ?>&order_page=1"
+                                   class="relative inline-flex items-center px-4 py-2 text-sm font-semibold transition-colors"
+                                   style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                                   onmouseover="this.style.background='var(--bg-secondary)'"
+                                   onmouseout="this.style.background='var(--bg-card)'">
+                                    1
+                                </a>
+                                <?php if ($start_page > 2): ?>
+                                    <span class="relative inline-flex items-center px-4 py-2 text-sm font-semibold"
+                                          style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)">
+                                        ...
+                                    </span>
+                                <?php endif; ?>
+                            <?php endif; ?>
+
+                            <?php for ($i = $start_page; $i <= $end_page; $i++): ?>
+                                <?php if ($i === $order_current_page): ?>
+                                    <span aria-current="page"
+                                          class="relative z-10 inline-flex items-center px-4 py-2 text-sm font-semibold text-white"
+                                          style="background: var(--accent-primary); border: 1px solid var(--accent-primary)">
+                                        <?= $i ?>
+                                    </span>
+                                <?php else: ?>
+                                    <a href="<?= $base_url ?>&order_page=<?= $i ?>"
+                                       class="relative inline-flex items-center px-4 py-2 text-sm font-semibold transition-colors"
+                                       style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                                       onmouseover="this.style.background='var(--bg-secondary)'"
+                                       onmouseout="this.style.background='var(--bg-card)'">
+                                        <?= $i ?>
+                                    </a>
+                                <?php endif; ?>
+                            <?php endfor; ?>
+
+                            <?php if ($end_page < $order_total_pages): ?>
+                                <?php if ($end_page < $order_total_pages - 1): ?>
+                                    <span class="relative inline-flex items-center px-4 py-2 text-sm font-semibold"
+                                          style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)">
+                                        ...
+                                    </span>
+                                <?php endif; ?>
+                                <a href="<?= $base_url ?>&order_page=<?= $order_total_pages ?>"
+                                   class="relative inline-flex items-center px-4 py-2 text-sm font-semibold transition-colors"
+                                   style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"
+                                   onmouseover="this.style.background='var(--bg-secondary)'"
+                                   onmouseout="this.style.background='var(--bg-card)'">
+                                    <?= $order_total_pages ?>
+                                </a>
+                            <?php endif; ?>
+
+                            <!-- Next Button -->
+                            <?php if ($order_current_page < $order_total_pages): ?>
+                                <a href="<?= $base_url ?>&order_page=<?= $order_current_page + 1 ?>"
+                                   class="relative inline-flex items-center rounded-r-md px-2 py-2 transition-colors"
+                                   style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)"
+                                   onmouseover="this.style.background='var(--bg-secondary)'"
+                                   onmouseout="this.style.background='var(--bg-card)'">
+                                    <span class="sr-only">Next</span>
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
+                                    </svg>
+                                </a>
+                            <?php else: ?>
+                                <span class="relative inline-flex items-center rounded-r-md px-2 py-2"
+                                      style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">
+                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" />
+                                    </svg>
+                                </span>
+                            <?php endif; ?>
+                        </nav>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
 
 <?php elseif ($log_view === 'menu_views'): ?>
     <!-- Menu Views Activity -->
     <?php
-    // Get menu view logs from activity_logs where action_type = 'view_menu'
-    $menu_view_logs = ActivityLogger::getRecentLogs($restaurant_id, 50, 0, 'view_menu');
+    // Get filter parameters
+    $filter_menu_user = isset($_GET['filter_menu_user']) ? (int)$_GET['filter_menu_user'] : null;
+    $filter_menu_date = isset($_GET['filter_menu_date']) ? $_GET['filter_menu_date'] : null;
+
+    // Build query with filters
+    $menu_conditions = ["al.restaurant_id = :restaurant_id", "al.action_type = 'view_menu'"];
+    $menu_params = [':restaurant_id' => $restaurant_id];
+
+    if ($filter_menu_user) {
+        $menu_conditions[] = "al.user_id = :user_id";
+        $menu_params[':user_id'] = $filter_menu_user;
+    }
+
+    if ($filter_menu_date) {
+        $menu_conditions[] = "DATE(al.created_at) = :filter_date";
+        $menu_params[':filter_date'] = $filter_menu_date;
+    }
+
+    $menu_where = implode(' AND ', $menu_conditions);
+
+    // Pagination for menu views
+    $menu_current_page = isset($_GET['menu_page']) ? max(1, (int)$_GET['menu_page']) : 1;
+    $menu_per_page = 10;
+    $menu_offset = ($menu_current_page - 1) * $menu_per_page;
+
+    // Get total count with filters
+    $menu_count_query = "SELECT COUNT(*) FROM activity_logs al WHERE {$menu_where}";
+    $menu_count_stmt = $db->prepare($menu_count_query);
+    foreach ($menu_params as $key => $value) {
+        $menu_count_stmt->bindValue($key, $value);
+    }
+    $menu_count_stmt->execute();
+    $total_menu_views = $menu_count_stmt->fetchColumn();
+
+    // Get menu view logs with filters and pagination
+    $menu_logs_query = "SELECT al.*, u.username
+                        FROM activity_logs al
+                        LEFT JOIN users u ON al.user_id = u.id
+                        WHERE {$menu_where}
+                        ORDER BY al.created_at DESC
+                        LIMIT :limit OFFSET :offset";
+    $menu_logs_stmt = $db->prepare($menu_logs_query);
+    foreach ($menu_params as $key => $value) {
+        $menu_logs_stmt->bindValue($key, $value);
+    }
+    $menu_logs_stmt->bindValue(':limit', $menu_per_page, PDO::PARAM_INT);
+    $menu_logs_stmt->bindValue(':offset', $menu_offset, PDO::PARAM_INT);
+    $menu_logs_stmt->execute();
+    $menu_view_logs = $menu_logs_stmt->fetchAll(PDO::FETCH_ASSOC);
     ?>
 
-    <div class="theme-transition rounded-xl shadow-sm border p-6" style="background: var(--bg-card); border-color: var(--border-primary)">
-        <h2 class="text-xl font-bold theme-header mb-6">Menu View Activity</h2>
+    <div class="theme-transition rounded-xl shadow-sm border p-4 sm:p-6" style="background: var(--bg-card); border-color: var(--border-primary)">
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-6 gap-4">
+            <h2 class="text-xl font-bold theme-header">Menu View Activity</h2>
+
+            <!-- Filters -->
+            <div class="flex flex-col sm:flex-row gap-3">
+                <select id="menuUserFilter"
+                        class="px-3 py-2 rounded-lg border text-sm w-full sm:w-auto"
+                        style="background: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-primary)"
+                        onchange="applyMenuViewFilters()">
+                    <option value="">All Users</option>
+                    <?php foreach ($all_users as $u): ?>
+                        <option value="<?= $u['id'] ?>" <?= $filter_menu_user == $u['id'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($u['username']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+
+                <input type="date"
+                       id="menuDateFilter"
+                       value="<?= htmlspecialchars($filter_menu_date ?? '') ?>"
+                       class="px-3 py-2 rounded-lg border text-sm w-full sm:w-auto"
+                       style="background: var(--bg-secondary); color: var(--text-primary); border-color: var(--border-primary)"
+                       onchange="applyMenuViewFilters()">
+
+                <?php if ($filter_menu_user || $filter_menu_date): ?>
+                    <button onclick="clearMenuViewFilters()"
+                            class="px-4 py-2 text-sm rounded-lg transition-colors text-white w-full sm:w-auto"
+                            style="background: var(--accent-primary)">
+                        Clear Filters
+                    </button>
+                <?php endif; ?>
+            </div>
+        </div>
 
         <?php if (empty($menu_view_logs)): ?>
             <div class="text-center py-12">
@@ -381,31 +975,153 @@ $action_types = ['create', 'update', 'delete', 'login', 'logout', 'enable', 'dis
                 <p class="text-sm" style="color: var(--text-secondary)">Menu view tracking will appear here when cashiers browse products</p>
             </div>
         <?php else: ?>
-            <div class="space-y-3">
+            <!-- Mobile: Card View -->
+            <div class="space-y-3 md:hidden">
                 <?php foreach ($menu_view_logs as $log): ?>
-                    <div class="flex items-start space-x-4 p-4 rounded-lg transition-colors hover:bg-gray-50"
+                    <div class="rounded-lg p-4 transition-colors"
                          style="border: 1px solid var(--border-primary); background: var(--bg-secondary)">
 
-                        <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-white bg-blue-500">
-                            👁️
+                        <div class="flex items-center space-x-3 mb-3">
+                            <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-white bg-blue-500">
+                                👁️
+                            </div>
+                            <h4 class="font-medium flex-grow" style="color: var(--text-primary)">
+                                Menu View
+                            </h4>
                         </div>
 
-                        <div class="flex-grow">
-                            <h4 class="font-medium mb-1" style="color: var(--text-primary)">
-                                <?= htmlspecialchars($log['description']) ?>
-                            </h4>
+                        <div class="text-sm mb-3" style="color: var(--text-primary)">
+                            <?= htmlspecialchars($log['description']) ?>
+                        </div>
 
-                            <div class="flex items-center text-sm space-x-4" style="color: var(--text-secondary)">
-                                <span>👤 <?= htmlspecialchars($log['username'] ?? 'System') ?></span>
-                                <span>🕐 <?= date('M j, Y g:i A', strtotime($log['created_at'])) ?></span>
-                                <?php if ($log['ip_address']): ?>
-                                    <span>🌐 <?= htmlspecialchars($log['ip_address']) ?></span>
-                                <?php endif; ?>
+                        <div class="space-y-1 text-sm" style="color: var(--text-secondary)">
+                            <div class="flex items-center">
+                                <span class="w-20 font-medium">User:</span>
+                                <span><?= htmlspecialchars($log['username'] ?? 'System') ?></span>
                             </div>
+                            <div class="flex items-center">
+                                <span class="w-20 font-medium">Date:</span>
+                                <span><?= date('M j, Y g:i A', strtotime($log['created_at'])) ?></span>
+                            </div>
+                            <?php if ($log['ip_address']): ?>
+                                <div class="flex items-center">
+                                    <span class="w-20 font-medium">IP:</span>
+                                    <span><?= htmlspecialchars($log['ip_address']) ?></span>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
                 <?php endforeach; ?>
             </div>
+
+            <!-- Desktop: Table View -->
+            <div class="hidden md:block overflow-x-auto" id="menuViewTableView">
+                <table class="w-full">
+                    <thead>
+                        <tr style="border-bottom: 2px solid var(--border-primary)">
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Description</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">User</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Date & Time</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">IP Address</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($menu_view_logs as $log): ?>
+                            <tr class="transition-colors"
+                                style="border-bottom: 1px solid var(--border-primary)"
+                                onmouseover="this.style.background='var(--bg-secondary)'; this.style.opacity='0.8'"
+                                onmouseout="this.style.background='transparent'; this.style.opacity='1'">
+
+                                <td class="px-4 py-3 font-medium" style="color: var(--text-primary)">
+                                    <?= htmlspecialchars($log['description']) ?>
+                                </td>
+
+                                <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                                    <?= htmlspecialchars($log['username'] ?? 'System') ?>
+                                </td>
+
+                                <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--text-secondary)">
+                                    <?= date('M j, Y g:i A', strtotime($log['created_at'])) ?>
+                                </td>
+
+                                <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                                    <?= $log['ip_address'] ? htmlspecialchars($log['ip_address']) : '-' ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination for Menu Views -->
+            <?php if ($total_menu_views > 10): ?>
+            <?php $menu_total_pages = ceil($total_menu_views / $menu_per_page); ?>
+            <div class="flex flex-col md:flex-row items-center justify-between px-2 sm:px-4 py-3 sm:px-6 mt-4 gap-4" style="border-top: 1px solid var(--border-primary)">
+                <!-- Mobile -->
+                <div class="flex flex-1 justify-between md:hidden w-full">
+                    <?php
+                    $menu_filter_params = '';
+                    if ($filter_menu_user) $menu_filter_params .= '&filter_menu_user=' . $filter_menu_user;
+                    if ($filter_menu_date) $menu_filter_params .= '&filter_menu_date=' . $filter_menu_date;
+                    ?>
+                    <?php if ($menu_current_page > 1): ?>
+                        <a href="admin.php?page=logs&log_view=menu_views&menu_page=<?= $menu_current_page - 1 ?><?= $menu_filter_params ?>"
+                           class="relative inline-flex items-center rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                           style="border: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)">Previous</a>
+                    <?php else: ?>
+                        <span class="relative inline-flex items-center rounded-md px-4 py-2 text-sm font-medium"
+                              style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">Previous</span>
+                    <?php endif; ?>
+                    <?php if ($menu_current_page < $menu_total_pages): ?>
+                        <a href="admin.php?page=logs&log_view=menu_views&menu_page=<?= $menu_current_page + 1 ?><?= $menu_filter_params ?>"
+                           class="relative ml-3 inline-flex items-center rounded-md px-4 py-2 text-sm font-medium transition-colors"
+                           style="border: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)">Next</a>
+                    <?php else: ?>
+                        <span class="relative ml-3 inline-flex items-center rounded-md px-4 py-2 text-sm font-medium"
+                              style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card); opacity: 0.5; cursor: not-allowed;">Next</span>
+                    <?php endif; ?>
+                </div>
+
+                <!-- Desktop -->
+                <div class="flex md:flex-1 md:items-center md:justify-between w-full">
+                    <p class="text-sm" style="color: var(--text-secondary)">
+                        Showing <span class="font-medium" style="color: var(--text-primary)"><?= (($menu_current_page - 1) * $menu_per_page) + 1 ?></span>
+                        to <span class="font-medium" style="color: var(--text-primary)"><?= min($menu_current_page * $menu_per_page, $total_menu_views) ?></span>
+                        of <span class="font-medium" style="color: var(--text-primary)"><?= $total_menu_views ?></span> results
+                    </p>
+                    <nav class="isolate inline-flex -space-x-px rounded-md shadow-sm">
+                        <?php if ($menu_current_page > 1): ?>
+                            <a href="admin.php?page=logs&log_view=menu_views&menu_page=<?= $menu_current_page - 1 ?><?= $menu_filter_params ?>"
+                               class="relative inline-flex items-center rounded-l-md px-2 py-2"
+                               style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)">
+                                <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clip-rule="evenodd" /></svg>
+                            </a>
+                        <?php endif; ?>
+                        <?php
+                        $start = max(1, $menu_current_page - 2);
+                        $end = min($menu_total_pages, $menu_current_page + 2);
+                        for ($i = $start; $i <= $end; $i++):
+                        ?>
+                            <?php if ($i === $menu_current_page): ?>
+                                <span class="relative z-10 inline-flex items-center px-4 py-2 text-sm font-semibold text-white"
+                                      style="background: var(--accent-primary); border: 1px solid var(--accent-primary)"><?= $i ?></span>
+                            <?php else: ?>
+                                <a href="admin.php?page=logs&log_view=menu_views&menu_page=<?= $i ?><?= $menu_filter_params ?>"
+                                   class="relative inline-flex items-center px-4 py-2 text-sm font-semibold"
+                                   style="border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); color: var(--text-primary); background: var(--bg-card)"><?= $i ?></a>
+                            <?php endif; ?>
+                        <?php endfor; ?>
+                        <?php if ($menu_current_page < $menu_total_pages): ?>
+                            <a href="admin.php?page=logs&log_view=menu_views&menu_page=<?= $menu_current_page + 1 ?><?= $menu_filter_params ?>"
+                               class="relative inline-flex items-center rounded-r-md px-2 py-2"
+                               style="border: 1px solid var(--border-primary); color: var(--text-secondary); background: var(--bg-card)">
+                                <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clip-rule="evenodd" /></svg>
+                            </a>
+                        <?php endif; ?>
+                    </nav>
+                </div>
+            </div>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
 
@@ -433,7 +1149,21 @@ function filterLogs() {
             showItem = false;
         }
 
-        item.style.display = showItem ? 'flex' : 'none';
+        // Check if it's a table row (desktop) or card (mobile)
+        const isTableRow = item.tagName === 'TR';
+
+        if (isTableRow) {
+            item.style.display = showItem ? 'table-row' : 'none';
+
+            // Also hide/show the associated details row if it exists
+            const detailsRow = item.nextElementSibling;
+            if (detailsRow && detailsRow.id && detailsRow.id.startsWith('details-')) {
+                detailsRow.style.display = showItem ? (detailsRow.classList.contains('hidden') ? 'none' : 'table-row') : 'none';
+            }
+        } else {
+            // Mobile card view
+            item.style.display = showItem ? 'block' : 'none';
+        }
     });
 }
 
@@ -481,9 +1211,40 @@ function clearOrderLogsFilters() {
     window.location.href = 'admin.php?page=logs&log_view=orders';
 }
 
+function applyMenuViewFilters() {
+    const userFilter = document.getElementById('menuUserFilter').value;
+    const dateFilter = document.getElementById('menuDateFilter').value;
+
+    // Build URL with filters
+    let url = 'admin.php?page=logs&log_view=menu_views';
+
+    if (userFilter) {
+        url += '&filter_menu_user=' + userFilter;
+    }
+
+    if (dateFilter) {
+        url += '&filter_menu_date=' + dateFilter;
+    }
+
+    window.location.href = url;
+}
+
+function clearMenuViewFilters() {
+    window.location.href = 'admin.php?page=logs&log_view=menu_views';
+}
+
 function toggleDetails(logId) {
+    // Try desktop version first
     const details = document.getElementById('details-' + logId);
-    details.classList.toggle('hidden');
+    if (details) {
+        details.classList.toggle('hidden');
+    }
+
+    // Try mobile version
+    const detailsMobile = document.getElementById('details-mobile-' + logId);
+    if (detailsMobile) {
+        detailsMobile.classList.toggle('hidden');
+    }
 }
 
 // Add event listeners only if elements exist (Current Activity tab)
@@ -496,65 +1257,5 @@ if (actionFilter) {
 
 if (userFilter) {
     userFilter.addEventListener('change', filterLogs);
-}
-
-// Global variables for pagination
-let currentOffset = 10;
-const logsPerPage = 10;
-
-// Load more logs function
-function loadMoreLogs() {
-    const loadBtn = document.getElementById('loadMoreBtn');
-    const loadingSpinner = document.getElementById('loadingSpinner');
-    const remainingCount = document.getElementById('remainingCount');
-
-    if (!loadBtn || !loadingSpinner || !remainingCount) return;
-    
-    // Show loading state
-    loadBtn.style.display = 'none';
-    loadingSpinner.classList.remove('hidden');
-    
-    // Make AJAX request
-    fetch('admin.php', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: `action=load_more_logs&offset=${currentOffset}&limit=${logsPerPage}`
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            // Append new logs to the container
-            const logsContainer = document.getElementById('logsContainer');
-            logsContainer.insertAdjacentHTML('beforeend', data.html);
-            
-            // Update offset
-            currentOffset += logsPerPage;
-            
-            // Update remaining count
-            const remaining = data.total_logs - currentOffset;
-            if (remaining > 0) {
-                remainingCount.textContent = remaining;
-                loadBtn.style.display = 'block';
-            } else {
-                // No more logs to load
-                loadBtn.style.display = 'none';
-            }
-        } else {
-            console.error('Failed to load more logs:', data.error);
-            alert('Failed to load more logs. Please try again.');
-            loadBtn.style.display = 'block';
-        }
-        
-        // Hide loading spinner
-        loadingSpinner.classList.add('hidden');
-    })
-    .catch(error => {
-        console.error('Error loading more logs:', error);
-        alert('Error loading more logs. Please try again.');
-        loadBtn.style.display = 'block';
-        loadingSpinner.classList.add('hidden');
-    });
 }
 </script>

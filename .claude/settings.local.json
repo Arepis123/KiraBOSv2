@@ -38,7 +38,18 @@
       "Bash(start http://localhost/KiraBOSv2/test_menu_logging.php)",
       "Bash(start http://localhost/KiraBOSv2/debug_activity_logs.php)",
       "Bash(start http://localhost/KiraBOSv2/run_add_view_menu.php)",
-      "Bash(del:*)"
+      "Bash(del:*)",
+      "Bash(start http://localhost/KiraBOSv2/test_pagination_render.php)",
+      "Bash(start http://localhost/KiraBOSv2/direct_test.php)",
+      "Bash(start http://localhost/KiraBOSv2/simple_pagination_test.php)",
+      "Bash(start http://localhost/KiraBOSv2/test_responsive.php)",
+      "Bash(start http://localhost/KiraBOSv2/test_tax_display.php)",
+      "Bash(start http://localhost/KiraBOSv2/check_all_tax_rates.php)",
+      "Bash(start http://localhost/KiraBOSv2/fix_tax_rate.php)",
+      "Bash(start http://localhost/KiraBOSv2/check_tax.php)",
+      "Bash(start http://localhost/KiraBOSv2/test_receipt.php)",
+      "Bash(start http://localhost/KiraBOSv2/debug_payment.php)",
+      "Bash(start http://localhost/KiraBOSv2/check_orders_table.php)"
     ],
     "deny": [],
     "ask": []

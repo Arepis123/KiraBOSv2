@@ -180,10 +180,11 @@ if ($_POST && isset($_POST['action'])) {
                 foreach ($_SESSION['cart'] as $item) {
                     $subtotal += $item['price'] * $item['quantity'];
                 }
-                
-                // Apply restaurant tax rate
-                $tax_rate = $restaurant['tax_rate'] ?? 0.0850; // Default 8.5%
-                $tax_amount = $subtotal * $tax_rate;
+
+                // Apply restaurant tax rate if enabled
+                $tax_enabled = $restaurant['tax_enabled'] ?? 1;
+                $tax_rate = $tax_enabled ? ($restaurant['tax_rate'] ?? 0.0850) : 0;
+                $tax_amount = $tax_enabled ? ($subtotal * $tax_rate) : 0;
                 $total = $subtotal + $tax_amount;
                 
                 // Validate cash payment (with proper decimal handling)
@@ -214,14 +215,14 @@ if ($_POST && isset($_POST['action'])) {
                 $order_number = 'ORD' . date('Ymd') . sprintf('%04d', rand(1, 9999));
                 
                 // Create order with restaurant context
-                $query = "INSERT INTO orders (restaurant_id, user_id, order_number, subtotal, tax_amount, total_amount, status, payment_method, payment_received, change_amount) VALUES (:restaurant_id, :user_id, :order_number, :subtotal, :tax_amount, :total, 'completed', :payment_method, :payment_received, :change_amount)";
+                $query = "INSERT INTO orders (restaurant_id, user_id, order_number, subtotal, tax_amount, total_amount, status, payment_method, payment_received, change_amount) VALUES (:restaurant_id, :user_id, :order_number, :subtotal, :tax_amount, :total_amount, 'completed', :payment_method, :payment_received, :change_amount)";
                 $stmt = $db->prepare($query);
                 $stmt->bindParam(':restaurant_id', $restaurant_id);
                 $stmt->bindParam(':user_id', $_SESSION['user_id']);
                 $stmt->bindParam(':order_number', $order_number);
                 $stmt->bindParam(':subtotal', $subtotal);
                 $stmt->bindParam(':tax_amount', $tax_amount);
-                $stmt->bindParam(':total', $total);
+                $stmt->bindParam(':total_amount', $total);
                 $stmt->bindParam(':payment_method', $payment_method);
                 $stmt->bindParam(':payment_received', $amount_tendered);
                 $stmt->bindParam(':change_amount', $change_given);
@@ -396,7 +397,20 @@ $category_names = array_keys($categories);
             --text-scale: 1;
             --hover-bg: #f3f4f6;
         }
-        
+
+        [data-theme="colorful"] {
+            --bg-primary: #f9fafb;
+            --bg-secondary: #ffffff;
+            --bg-header: linear-gradient(to right, #eef2ff, #f3e8ff);
+            --bg-cart: linear-gradient(to bottom, #ffffff, #eef2ff);
+            --text-primary: #111827;
+            --text-secondary: #6b7280;
+            --border-primary: #e0e7ff;
+            --accent-primary: #4f46e5;
+            --accent-secondary: #6366f1;
+            --hover-bg: #f3f4f6;
+        }
+
         [data-theme="dark"] {
             --bg-primary: #111827;
             --bg-secondary: #1f2937;
@@ -775,6 +789,13 @@ $category_names = array_keys($categories);
         }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        // Apply theme immediately before page renders to prevent flash
+        (function() {
+            const savedTheme = localStorage.getItem('pos-theme') || 'colorful';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        })();
+    </script>
 </head>
 <body class="theme-transition min-h-screen font-sans" style="background: var(--bg-primary)">
     <div class="flex h-screen theme-transition">
@@ -1155,7 +1176,23 @@ $category_names = array_keys($categories);
 
             <!-- Order Summary -->
             <div class="border-t p-4 space-y-3" style="border-color: var(--border-primary)">
-                <div class="flex justify-between text-lg font-bold">
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between" style="color: var(--text-secondary)">
+                        <span>Subtotal:</span>
+                        <span id="subtotal-amount"><?= htmlspecialchars($restaurant['currency']) ?>0.00</span>
+                    </div>
+                    <?php if (!empty($restaurant['tax_enabled'])): ?>
+                    <?php
+                    $tax_percentage = $restaurant['tax_rate'] * 100;
+                    $tax_display = ($tax_percentage == floor($tax_percentage)) ? number_format($tax_percentage, 0) : number_format($tax_percentage, 2);
+                    ?>
+                    <div class="flex justify-between" style="color: var(--text-secondary)">
+                        <span>Tax (<?= $tax_display ?>%):</span>
+                        <span id="tax-amount"><?= htmlspecialchars($restaurant['currency']) ?>0.00</span>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                <div class="flex justify-between text-lg font-bold pt-2 border-t" style="border-color: var(--border-primary)">
                     <span style="color: var(--text-primary)">Total:</span>
                     <span id="total-amount" style="color: var(--accent-primary)"><?= htmlspecialchars($restaurant['currency']) ?>0.00</span>
                 </div>
@@ -1183,7 +1220,7 @@ $category_names = array_keys($categories);
 
     <!-- Payment Calculator Modal -->
     <div id="payment-modal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden flex items-center justify-center p-4">
-        <div class="rounded-xl shadow-2xl w-full max-w-sm mx-auto max-h-[85vh] overflow-y-auto scrollbar-hide" style="background: var(--bg-primary);">
+        <div class="rounded-xl shadow-2xl w-full max-w-sm mx-auto max-h-[95vh] overflow-y-auto scrollbar-hide" style="background: var(--bg-primary);">
             <!-- Modal Header -->
             <div class="text-center p-4 border-b border-gray-100">
                 <h3 class="text-base font-semibold text-primary mb-1">Payment</h3>
@@ -1233,9 +1270,9 @@ $category_names = array_keys($categories);
                     <!-- Quick Amount Buttons -->
                     <div class="flex space-x-1">
                         <button onclick="setExactAmount()" class="flex-1 bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded text-xs font-medium">Exact</button>
-                        <button onclick="addQuickAmount(10)" class="flex-1 bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+10</button>
-                        <button onclick="addQuickAmount(20)" class="flex-1 bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+20</button>
-                        <button onclick="addQuickAmount(50)" class="flex-1 bg-primary hover:bg-secondary text-white px-2 py-1 rounded text-xs font-medium">+50</button>
+                        <button onclick="addQuickAmount(10)" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+10</button>
+                        <button onclick="addQuickAmount(20)" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+20</button>
+                        <button onclick="addQuickAmount(50)" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+50</button>
                     </div>
 
                     <!-- Change Display -->
@@ -1281,7 +1318,7 @@ $category_names = array_keys($categories);
 
             <!-- Modal Footer -->
             <div class="flex space-x-2 p-4 border-t" style="border-color: var(--border-primary);">
-                <button onclick="closePaymentModal()" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white py-2 px-3 rounded-lg font-medium text-sm">Cancel</button>
+                <button onclick="closePaymentModal()" class="flex-1 py-2 px-3 rounded-lg font-medium text-sm transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">Cancel</button>
                 <button id="complete-payment-btn" onclick="completePayment()" class="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 px-3 rounded-lg font-medium text-sm">Complete</button>
             </div>
         </div>
@@ -1322,16 +1359,103 @@ $category_names = array_keys($categories);
         </div>
     </div>
 
+    <!-- Receipt Modal -->
+    <div id="receipt-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 theme-transition" style="background: var(--bg-secondary);">
+            <!-- Receipt Content -->
+            <div id="receipt-content" class="p-6">
+                <!-- Receipt Header -->
+                <div class="text-center mb-6 pb-4 border-b-2 border-dashed" style="border-color: var(--border-primary);">
+                    <h2 class="text-2xl font-bold mb-2" style="color: var(--text-primary);" id="receipt-restaurant-name">Restaurant Name</h2>
+                    <p class="text-sm" style="color: var(--text-secondary);">Thank you for your purchase!</p>
+                </div>
+
+                <!-- Order Info -->
+                <div class="mb-4 pb-4 border-b" style="border-color: var(--border-primary);">
+                    <div class="flex justify-between text-sm mb-2">
+                        <span style="color: var(--text-secondary);">Order #:</span>
+                        <span class="font-semibold" style="color: var(--text-primary);" id="receipt-order-number">-</span>
+                    </div>
+                    <div class="flex justify-between text-sm mb-2">
+                        <span style="color: var(--text-secondary);">Date:</span>
+                        <span style="color: var(--text-primary);" id="receipt-date">-</span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                        <span style="color: var(--text-secondary);">Cashier:</span>
+                        <span style="color: var(--text-primary);" id="receipt-cashier">-</span>
+                    </div>
+                </div>
+
+                <!-- Items -->
+                <div class="mb-4 pb-4 border-b" style="border-color: var(--border-primary);">
+                    <h3 class="font-semibold mb-3" style="color: var(--text-primary);">Items</h3>
+                    <div id="receipt-items" class="space-y-2">
+                        <!-- Items will be inserted here -->
+                    </div>
+                </div>
+
+                <!-- Totals -->
+                <div class="space-y-2 mb-4 pb-4 border-b-2 border-dashed" style="border-color: var(--border-primary);">
+                    <div class="flex justify-between text-sm">
+                        <span style="color: var(--text-secondary);">Subtotal:</span>
+                        <span style="color: var(--text-primary);" id="receipt-subtotal">RM0.00</span>
+                    </div>
+                    <div class="flex justify-between text-sm" id="receipt-tax-row">
+                        <span style="color: var(--text-secondary);" id="receipt-tax-label">Tax:</span>
+                        <span style="color: var(--text-primary);" id="receipt-tax">RM0.00</span>
+                    </div>
+                    <div class="flex justify-between text-lg font-bold">
+                        <span style="color: var(--text-primary);">Total:</span>
+                        <span style="color: var(--text-primary);" id="receipt-total">RM0.00</span>
+                    </div>
+                </div>
+
+                <!-- Payment Info -->
+                <div class="space-y-2 mb-6">
+                    <div class="flex justify-between text-sm">
+                        <span style="color: var(--text-secondary);">Payment Method:</span>
+                        <span class="font-semibold" style="color: var(--text-primary);" id="receipt-payment-method">-</span>
+                    </div>
+                    <div class="flex justify-between text-sm" id="receipt-tendered-row">
+                        <span style="color: var(--text-secondary);">Amount Tendered:</span>
+                        <span style="color: var(--text-primary);" id="receipt-tendered">RM0.00</span>
+                    </div>
+                    <div class="flex justify-between text-sm" id="receipt-change-row">
+                        <span style="color: var(--text-secondary);">Change:</span>
+                        <span class="font-semibold text-green-600" id="receipt-change">RM0.00</span>
+                    </div>
+                </div>
+
+                <!-- Footer -->
+                <div class="text-center text-xs" style="color: var(--text-secondary);">
+                    <p>Powered by KiraBOS</p>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex gap-2 px-6 pb-6">
+                <button onclick="printReceipt()" class="flex-1 py-3 rounded-lg font-medium text-white transition-opacity hover:opacity-80 flex items-center justify-center gap-2" style="background: var(--accent-primary);">
+                    <i data-lucide="printer" class="w-4 h-4"></i>
+                    Print Receipt
+                </button>
+                <button onclick="closeReceiptModal()" class="flex-1 py-3 rounded-lg font-medium transition-colors" style="background: var(--bg-secondary); color: var(--text-primary);" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Settings Modal -->
     <div id="settings-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
         <div class="bg-white rounded-lg shadow-xl w-96 max-w-md mx-4 theme-transition max-h-[90vh] overflow-y-auto" style="background: var(--bg-secondary); border: 1px solid var(--border-primary);">
             <div class="px-6 py-4 border-b sticky top-0" style="border-color: var(--border-primary); background: var(--bg-secondary);">
                 <div class="flex items-center justify-between">
-                    <h3 class="text-lg font-semibold" style="color: var(--text-primary);">⚙️ Cashier Settings</h3>
+                    <h3 class="text-lg font-semibold flex items-center gap-2" style="color: var(--text-primary);">
+                        <i data-lucide="settings" class="w-5 h-5"></i>
+                        Cashier Settings
+                    </h3>
                     <button onclick="closeSettingsModal()" class="text-gray-400 hover:text-gray-600">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                        </svg>
+                        <i data-lucide="x" class="w-6 h-6"></i>
                     </button>
                 </div>
             </div>
@@ -1339,26 +1463,32 @@ $category_names = array_keys($categories);
             <div class="px-6 py-4 space-y-6">
                 <!-- Theme Section -->
                 <div>
-                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">🎨 Theme</label>
+                    <label class="block text-sm font-medium mb-2 flex items-center gap-2" style="color: var(--text-primary);">
+                        <i data-lucide="palette" class="w-4 h-4"></i>
+                        Theme
+                    </label>
                     <div class="grid grid-cols-2 gap-2">
-                        <button onclick="setTheme('colorful')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
-                            <span>🎨</span><span>Colorful</span>
+                        <button id="theme-colorful" onclick="setTheme('colorful')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <i data-lucide="sparkles" class="w-4 h-4"></i><span>Colorful</span>
                         </button>
-                        <button onclick="setTheme('dark')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
-                            <span>🌙</span><span>Dark</span>
+                        <button id="theme-dark" onclick="setTheme('dark')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <i data-lucide="moon" class="w-4 h-4"></i><span>Dark</span>
                         </button>
-                        <button onclick="setTheme('minimal')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
-                            <span>⚪</span><span>Minimal</span>
+                        <button id="theme-minimal" onclick="setTheme('minimal')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <i data-lucide="circle" class="w-4 h-4"></i><span>Minimal</span>
                         </button>
-                        <button onclick="setTheme('original')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
-                            <span>⚫</span><span>Original</span>
+                        <button id="theme-original" onclick="setTheme('original')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                            <i data-lucide="monitor" class="w-4 h-4"></i><span>Original</span>
                         </button>
                     </div>
                 </div>
 
                 <!-- Sound Settings -->
                 <div class="border-t pt-4" style="border-color: var(--border-primary);">
-                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">🔊 Sound Settings</label>
+                    <label class="block text-sm font-medium mb-2 flex items-center gap-2" style="color: var(--text-primary);">
+                        <i data-lucide="volume-2" class="w-4 h-4"></i>
+                        Sound Settings
+                    </label>
                     <div class="space-y-2">
                         <div class="flex items-center justify-between">
                             <span class="text-sm" style="color: var(--text-primary);">Button Click Sounds</span>
@@ -1375,15 +1505,22 @@ $category_names = array_keys($categories);
                             </label>
                         </div>
                         <div class="flex space-x-2 pt-2">
-                            <button onclick="testSound('click')" class="flex-1 text-xs px-3 py-2 rounded-lg transition-colors" style="background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-primary);">🔊 Test Click</button>
-                            <button onclick="testSound('success')" class="flex-1 text-xs px-3 py-2 rounded-lg transition-colors" style="background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-primary);">🎉 Test Success</button>
+                            <button onclick="testSound('click')" class="flex-1 text-xs px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-1" style="background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-primary);">
+                                <i data-lucide="volume-2" class="w-3 h-3"></i> Test Click
+                            </button>
+                            <button onclick="testSound('success')" class="flex-1 text-xs px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-1" style="background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-primary);">
+                                <i data-lucide="party-popper" class="w-3 h-3"></i> Test Success
+                            </button>
                         </div>
                     </div>
                 </div>
 
                 <!-- Display Settings -->
                 <div class="border-t pt-4" style="border-color: var(--border-primary);">
-                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">📱 Display Settings</label>
+                    <label class="block text-sm font-medium mb-2 flex items-center gap-2" style="color: var(--text-primary);">
+                        <i data-lucide="monitor" class="w-4 h-4"></i>
+                        Display Settings
+                    </label>
                     <div class="space-y-3">
                         <div>
                             <span class="block text-sm mb-1" style="color: var(--text-primary);">Text Size</span>
@@ -1406,7 +1543,10 @@ $category_names = array_keys($categories);
 
                 <!-- Numpad Layout -->
                 <div class="border-t pt-4" style="border-color: var(--border-primary);">
-                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">🔢 Numpad Layout</label>
+                    <label class="block text-sm font-medium mb-2 flex items-center gap-2" style="color: var(--text-primary);">
+                        <i data-lucide="hash" class="w-4 h-4"></i>
+                        Numpad Layout
+                    </label>
                     <div class="grid grid-cols-1 gap-2">
                         <button onclick="setNumpadLayout('calculator')" class="text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition" style="color: var(--text-primary); background: var(--bg-primary);" id="layout-calculator">
                             <div class="flex items-center justify-between">
@@ -1433,13 +1573,16 @@ $category_names = array_keys($categories);
 
                 <!-- Workflow Settings -->
                 <div class="border-t pt-4" style="border-color: var(--border-primary);">
-                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">⚡ Workflow Settings</label>
+                    <label class="block text-sm font-medium mb-2 flex items-center gap-2" style="color: var(--text-primary);">
+                        <i data-lucide="zap" class="w-4 h-4"></i>
+                        Workflow Settings
+                    </label>
                     <div class="space-y-3">
                         <div>
                             <span class="block text-sm mb-1" style="color: var(--text-primary);">Default Payment Method</span>
                             <select id="default-payment" onchange="setDefaultPayment(this.value)" class="w-full px-3 py-2 text-sm border rounded-lg" style="background: var(--bg-primary); color: var(--text-primary); border-color: var(--border-primary);">
-                                <option value="cash">💵 Cash</option>
-                                <option value="qr_code">📱 QR Code</option>
+                                <option value="cash">Cash</option>
+                                <option value="qr_code">QR Code</option>
                             </select>
                         </div>
                         <div class="flex items-center justify-between">
@@ -1463,9 +1606,12 @@ $category_names = array_keys($categories);
                 <!-- Admin Options -->
                 <?php if ($_SESSION['role'] === 'admin'): ?>
                 <div class="border-t pt-4" style="border-color: var(--border-primary);">
-                    <label class="block text-sm font-medium mb-2" style="color: var(--text-primary);">🔧 Admin Options</label>
-                    <button onclick="window.location.href='admin.php'" class="w-full text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-3" style="color: var(--text-primary); background: var(--bg-primary);">
-                        <span class="text-lg">🔧</span>
+                    <label class="block text-sm font-medium mb-2 flex items-center gap-2" style="color: var(--text-primary);">
+                        <i data-lucide="wrench" class="w-4 h-4"></i>
+                        Admin Options
+                    </label>
+                    <button onclick="window.location.href='admin.php'" class="w-full text-left px-3 py-2 text-sm rounded-lg transition-colors theme-transition flex items-center space-x-2" style="color: var(--text-primary); background: var(--bg-primary);">
+                        <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
                         <span>Admin Panel</span>
                     </button>
                 </div>
@@ -1478,6 +1624,7 @@ $category_names = array_keys($categories);
         const csrfToken = '<?= Security::generateCSRFToken() ?>';
         const restaurantConfig = {
             currency: '<?= htmlspecialchars($restaurant['currency']) ?>',
+            taxEnabled: <?= !empty($restaurant['tax_enabled']) ? 'true' : 'false' ?>,
             taxRate: <?= $restaurant['tax_rate'] ?? 0.0850 ?>,
             name: '<?= htmlspecialchars($restaurant['name']) ?>'
         };
@@ -2131,27 +2278,50 @@ $category_names = array_keys($categories);
                 html = '<div class="text-center py-4"><p class="text-sm" style="color: var(--text-secondary);">No items selected</p></div>';
             }
             
-            // Apply tax rate (same as backend calculation)
-            const tax_rate = <?= $restaurant['tax_rate'] ?? 0.0850 ?>;
-            const tax_amount = subtotal * tax_rate;
+            // Apply tax rate if enabled (same as backend calculation)
+            const tax_rate = restaurantConfig.taxEnabled ? restaurantConfig.taxRate : 0;
+            const tax_amount = restaurantConfig.taxEnabled ? (subtotal * tax_rate) : 0;
             const total = subtotal + tax_amount;
             currentTotal = total;
-            
+
+            console.log('Tax Calculation Debug:', {
+                subtotal: subtotal,
+                taxEnabled: restaurantConfig.taxEnabled,
+                taxRate: restaurantConfig.taxRate,
+                taxAmount: tax_amount,
+                total: total
+            });
+
             cartItems.innerHTML = html;
-            
+
+            // Update subtotal display
+            const subtotalElement = document.getElementById('subtotal-amount');
+            if (subtotalElement) {
+                subtotalElement.textContent = formatCurrency(subtotal);
+            }
+
+            // Update tax display if tax is enabled
+            const taxElement = document.getElementById('tax-amount');
+            if (taxElement) {
+                taxElement.textContent = formatCurrency(tax_amount);
+                console.log('Tax element updated with:', formatCurrency(tax_amount));
+            } else {
+                console.log('Tax element not found - tax might be disabled');
+            }
+
             // Animate cart badge if item count changed
             if (cartCount.textContent != itemCount) {
                 cartCount.classList.add('cart-badge');
                 setTimeout(() => cartCount.classList.remove('cart-badge'), 400);
             }
-            
+
             // Animate total if it changed
             const currentTotalText = formatCurrency(total);
             if (totalAmount.textContent !== currentTotalText) {
                 totalAmount.classList.add('cart-total-highlight');
                 setTimeout(() => totalAmount.classList.remove('cart-total-highlight'), 400);
             }
-            
+
             totalAmount.textContent = currentTotalText;
             cartCount.textContent = itemCount;
             checkoutBtn.disabled = Object.keys(cart).length === 0;
@@ -2390,17 +2560,49 @@ $category_names = array_keys($categories);
             })
             .then(response => response.json())
             .then(data => {
+                console.log('Payment response received:', data);
                 if (data.success) {
                     // Update frontend stock data to match database after successful payment
                     updateStockDataAfterPayment();
-                    
-                    cart = {};
-                    updateCartDisplay();
+
+                    // Store cart items BEFORE any operations
+                    console.log('Current cart before copy:', cart);
+                    const cartItems = {};
+                    for (const [id, item] of Object.entries(cart)) {
+                        cartItems[id] = {
+                            id: item.id,
+                            name: item.name,
+                            price: parseFloat(item.price),
+                            quantity: parseInt(item.quantity)
+                        };
+                    }
+                    console.log('Cart items copied:', cartItems);
+
+                    // Store order data INCLUDING cart items before clearing cart
+                    const orderData = {
+                        order_number: data.order_number,
+                        subtotal: parseFloat(data.subtotal),
+                        tax_amount: parseFloat(data.tax_amount),
+                        total: parseFloat(data.total),
+                        payment_method: data.payment_method,
+                        amount_tendered: parseFloat(paymentData.amount_tendered),
+                        change_given: parseFloat(data.change_given),
+                        items: cartItems
+                    };
+
+                    // Close payment modal first
                     closePaymentModal();
-                    
+
                     // Play success sound for completed payment
                     playSuccessSound();
-                    
+
+                    // Show receipt modal
+                    showReceipt(orderData);
+
+                    // Clear cart after showing receipt
+                    cart = {};
+                    updateCartDisplay();
+
                     if (currentPaymentMethod === 'cash' && paymentData.change_given > 0) {
                         showToast(`Payment completed! Change: RM${paymentData.change_given.toFixed(2)}`);
                     } else {
@@ -2420,7 +2622,8 @@ $category_names = array_keys($categories);
                 }
             })
             .catch(error => {
-                showToast('Payment failed', true);
+                console.error('Payment error:', error);
+                showToast('Payment failed: ' + error.message, true);
             })
             .finally(() => {
                 if (completeBtn) {
@@ -2696,24 +2899,27 @@ $category_names = array_keys($categories);
             currentTheme = theme;
             document.body.setAttribute('data-theme', theme);
             localStorage.setItem('pos-theme', theme);
-            
+
             const themeIcon = document.getElementById('theme-icon');
             const themeText = document.getElementById('theme-text');
             const dropdown = document.getElementById('theme-dropdown');
-            
+
             const themes = {
                 'colorful': { icon: '🎨', text: 'Colorful' },
                 'dark': { icon: '🌙', text: 'Dark' },
                 'minimal': { icon: '⚪', text: 'Minimal' },
                 'original': { icon: '⚫', text: 'Original' }
             };
-            
+
             if (themeIcon) themeIcon.textContent = themes[theme].icon;
             if (themeText) themeText.textContent = themes[theme].text;
             if (dropdown) dropdown.classList.add('hidden');
-            
+
             // Update product cards based on theme
             updateProductCardTheme(theme);
+
+            // Update theme selection in settings modal
+            updateThemeSelection(theme);
         }
         
         function updateProductCardTheme(theme) {
@@ -2888,6 +3094,128 @@ $category_names = array_keys($categories);
             if (modal) {
                 modal.classList.add('hidden');
             }
+        }
+
+        // Receipt Functions
+        function showReceipt(orderData) {
+            // Populate receipt with order data
+            document.getElementById('receipt-restaurant-name').textContent = restaurantConfig.name;
+            document.getElementById('receipt-order-number').textContent = orderData.order_number || '-';
+
+            // Format date
+            const now = new Date();
+            const dateStr = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+            document.getElementById('receipt-date').textContent = dateStr;
+
+            // Cashier name from session
+            document.getElementById('receipt-cashier').textContent = '<?= htmlspecialchars($_SESSION['username'] ?? 'Cashier') ?>';
+
+            // Populate items from orderData.items (passed from payment completion)
+            const itemsContainer = document.getElementById('receipt-items');
+            itemsContainer.innerHTML = '';
+
+            for (const [id, item] of Object.entries(orderData.items)) {
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'flex justify-between text-sm';
+                itemDiv.innerHTML = `
+                    <div class="flex-1">
+                        <span style="color: var(--text-primary);">${item.quantity}x ${item.name}</span>
+                    </div>
+                    <span style="color: var(--text-primary);">${restaurantConfig.currency}${(item.price * item.quantity).toFixed(2)}</span>
+                `;
+                itemsContainer.appendChild(itemDiv);
+            }
+
+            // Populate totals - ensure all values are numbers
+            const subtotal = parseFloat(orderData.subtotal) || 0;
+            const taxAmount = parseFloat(orderData.tax_amount) || 0;
+            const total = parseFloat(orderData.total) || 0;
+            const changeGiven = parseFloat(orderData.change_given) || 0;
+            const amountTendered = parseFloat(orderData.amount_tendered) || total;
+
+            document.getElementById('receipt-subtotal').textContent = restaurantConfig.currency + subtotal.toFixed(2);
+
+            if (restaurantConfig.taxEnabled && taxAmount > 0) {
+                const taxRate = (restaurantConfig.taxRate * 100).toFixed(2);
+                document.getElementById('receipt-tax-label').textContent = `Tax (${taxRate}%):`;
+                document.getElementById('receipt-tax').textContent = restaurantConfig.currency + taxAmount.toFixed(2);
+                document.getElementById('receipt-tax-row').style.display = 'flex';
+            } else {
+                document.getElementById('receipt-tax-row').style.display = 'none';
+            }
+
+            document.getElementById('receipt-total').textContent = restaurantConfig.currency + total.toFixed(2);
+
+            // Payment info
+            const paymentMethod = orderData.payment_method === 'cash' ? 'Cash' : 'QR Code';
+            document.getElementById('receipt-payment-method').textContent = paymentMethod;
+
+            if (orderData.payment_method === 'cash') {
+                document.getElementById('receipt-tendered').textContent = restaurantConfig.currency + amountTendered.toFixed(2);
+                document.getElementById('receipt-change').textContent = restaurantConfig.currency + changeGiven.toFixed(2);
+                document.getElementById('receipt-tendered-row').style.display = 'flex';
+                document.getElementById('receipt-change-row').style.display = 'flex';
+            } else {
+                document.getElementById('receipt-tendered-row').style.display = 'none';
+                document.getElementById('receipt-change-row').style.display = 'none';
+            }
+
+            // Show modal
+            const modal = document.getElementById('receipt-modal');
+            modal.classList.remove('hidden');
+
+            // Reinitialize Lucide icons for the receipt modal
+            setTimeout(() => lucide.createIcons(), 100);
+        }
+
+        function closeReceiptModal() {
+            const modal = document.getElementById('receipt-modal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+        }
+
+        function printReceipt() {
+            // Get the receipt content
+            const receiptContent = document.getElementById('receipt-content').innerHTML;
+
+            // Create a new window for printing
+            const printWindow = window.open('', '', 'height=600,width=400');
+            printWindow.document.write('<html><head><title>Receipt</title>');
+            printWindow.document.write('<style>');
+            printWindow.document.write('body { font-family: Arial, sans-serif; padding: 20px; }');
+            printWindow.document.write('.border-b { border-bottom: 1px solid #e5e7eb; }');
+            printWindow.document.write('.border-b-2 { border-bottom: 2px solid #e5e7eb; }');
+            printWindow.document.write('.border-dashed { border-style: dashed; }');
+            printWindow.document.write('.text-center { text-align: center; }');
+            printWindow.document.write('.flex { display: flex; }');
+            printWindow.document.write('.justify-between { justify-content: space-between; }');
+            printWindow.document.write('.mb-2 { margin-bottom: 0.5rem; }');
+            printWindow.document.write('.mb-3 { margin-bottom: 0.75rem; }');
+            printWindow.document.write('.mb-4 { margin-bottom: 1rem; }');
+            printWindow.document.write('.mb-6 { margin-bottom: 1.5rem; }');
+            printWindow.document.write('.pb-4 { padding-bottom: 1rem; }');
+            printWindow.document.write('.font-bold { font-weight: bold; }');
+            printWindow.document.write('.font-semibold { font-weight: 600; }');
+            printWindow.document.write('.text-sm { font-size: 0.875rem; }');
+            printWindow.document.write('.text-xs { font-size: 0.75rem; }');
+            printWindow.document.write('.text-lg { font-size: 1.125rem; }');
+            printWindow.document.write('.text-2xl { font-size: 1.5rem; }');
+            printWindow.document.write('.space-y-2 > * + * { margin-top: 0.5rem; }');
+            printWindow.document.write('.text-green-600 { color: #059669; }');
+            printWindow.document.write('i { display: none; }'); // Hide lucide icons in print
+            printWindow.document.write('</style>');
+            printWindow.document.write('</head><body>');
+            printWindow.document.write(receiptContent);
+            printWindow.document.write('</body></html>');
+            printWindow.document.close();
+            printWindow.focus();
+
+            // Print after content loads
+            setTimeout(() => {
+                printWindow.print();
+                printWindow.close();
+            }, 250);
         }
 
         // Cashier Settings Functions
@@ -3232,25 +3560,46 @@ $category_names = array_keys($categories);
         function updateAllSettingsUI() {
             // Delay to ensure DOM elements are available
             setTimeout(() => {
+                // Update theme selection
+                updateThemeSelection(currentTheme);
+
                 // Update text size selection
                 updateTextSizeSelection(cashierSettings.display.textSize);
-                
+
                 // Update numpad layout selection
                 updateNumpadLayoutSelection(cashierSettings.numpad.layout);
-                
+
                 // Update currency format selection
                 updateCurrencyFormatSelection(cashierSettings.display.currencyFormat);
-                
+
                 // Update sound toggles
                 updateSoundToggles();
-                
+
                 // Update default payment method
                 updateDefaultPaymentSelection(cashierSettings.workflow.defaultPayment);
-                
+
                 console.log('Settings UI updated for:', cashierSettings.display.textSize);
             }, 200);
         }
         
+        // Update theme selection in UI
+        function updateThemeSelection(theme) {
+            document.querySelectorAll('[id^="theme-"]').forEach(btn => {
+                btn.style.background = 'var(--bg-primary)';
+                btn.style.fontWeight = 'normal';
+                btn.style.color = 'var(--text-primary)';
+                btn.style.border = '1px solid transparent';
+            });
+
+            const selectedBtn = document.getElementById(`theme-${theme}`);
+            if (selectedBtn) {
+                selectedBtn.style.background = 'var(--accent-primary)';
+                selectedBtn.style.fontWeight = 'bold';
+                selectedBtn.style.color = 'white';
+                selectedBtn.style.border = '2px solid var(--accent-primary)';
+            }
+        }
+
         // Update numpad layout selection in UI
         function updateNumpadLayoutSelection(layout) {
             document.querySelectorAll('[id^="layout-"]').forEach(btn => {
@@ -3258,7 +3607,7 @@ $category_names = array_keys($categories);
                 btn.style.fontWeight = 'normal';
                 btn.style.color = 'var(--text-primary)';
             });
-            
+
             const selectedBtn = document.getElementById(`layout-${layout}`);
             if (selectedBtn) {
                 selectedBtn.style.background = 'var(--accent-primary)';
@@ -3334,6 +3683,11 @@ $category_names = array_keys($categories);
         // Initialize
 
         document.addEventListener('DOMContentLoaded', function() {
+            // Apply saved theme immediately
+            const savedTheme = localStorage.getItem('pos-theme') || 'colorful';
+            document.body.setAttribute('data-theme', savedTheme);
+            currentTheme = savedTheme;
+
             // Initialize Lucide icons
             lucide.createIcons();
 
@@ -3353,10 +3707,15 @@ $category_names = array_keys($categories);
             
             // Close settings modal when clicking outside
             document.addEventListener('click', function(e) {
-                const modal = document.getElementById('settings-modal');
-                
-                if (modal && !modal.classList.contains('hidden') && e.target === modal) {
-                    modal.classList.add('hidden');
+                const settingsModal = document.getElementById('settings-modal');
+                const receiptModal = document.getElementById('receipt-modal');
+
+                if (settingsModal && !settingsModal.classList.contains('hidden') && e.target === settingsModal) {
+                    settingsModal.classList.add('hidden');
+                }
+
+                if (receiptModal && !receiptModal.classList.contains('hidden') && e.target === receiptModal) {
+                    receiptModal.classList.add('hidden');
                 }
             });
             

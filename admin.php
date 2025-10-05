@@ -19,116 +19,162 @@ $restaurant = Restaurant::getCurrentRestaurant();
 // Handle AJAX requests for loading more activity logs
 if (isset($_POST['action']) && $_POST['action'] === 'load_more_logs') {
     header('Content-Type: application/json');
-    
+
     $offset = (int)($_POST['offset'] ?? 0);
     $limit = 10; // Load 10 logs at a time
     $action_type = $_POST['action_filter'] ?? null;
     $user_id = $_POST['user_filter'] ?? null;
-    
+
     if ($action_type === '') $action_type = null;
     if ($user_id === '') $user_id = null;
-    
+
     try {
-        $logs = ActivityLogger::getRecentLogs($restaurant_id, $limit, $offset, $action_type, $user_id);
-        $total_logs = ActivityLogger::getLogsCount($restaurant_id, $action_type, $user_id);
-        
+        // Get logs excluding view_menu
+        $where_conditions = ["al.restaurant_id = :restaurant_id", "al.action_type != 'view_menu'"];
+        $params = [':restaurant_id' => $restaurant_id];
+
+        if ($action_type) {
+            $where_conditions[] = "al.action_type = :action_type";
+            $params[':action_type'] = $action_type;
+        }
+
+        if ($user_id) {
+            $where_conditions[] = "al.user_id = :user_id";
+            $params[':user_id'] = $user_id;
+        }
+
+        $where_clause = implode(' AND ', $where_conditions);
+
+        $logs_query = "SELECT al.*, u.username
+                       FROM activity_logs al
+                       LEFT JOIN users u ON al.user_id = u.id
+                       WHERE {$where_clause}
+                       ORDER BY al.created_at DESC
+                       LIMIT :limit OFFSET :offset";
+        $logs_stmt = $db->prepare($logs_query);
+        foreach ($params as $key => $value) {
+            $logs_stmt->bindValue($key, $value);
+        }
+        $logs_stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $logs_stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+        $logs_stmt->execute();
+        $logs = $logs_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Get total count
+        $count_query = "SELECT COUNT(*) FROM activity_logs al WHERE {$where_clause}";
+        $count_stmt = $db->prepare($count_query);
+        foreach ($params as $key => $value) {
+            $count_stmt->bindValue($key, $value);
+        }
+        $count_stmt->execute();
+        $total_logs = $count_stmt->fetchColumn();
+
         ob_start();
     foreach ($logs as $log):
 ?>
-        <div class="log-item flex items-start space-x-4 p-4 rounded-lg transition-colors hover:bg-gray-50" 
-             style="border: 1px solid var(--border-primary); background: var(--bg-secondary)"
-             data-action="<?= $log['action_type'] ?>" 
-             data-user="<?= $log['user_id'] ?>"
-             data-date="<?= date('Y-m-d', strtotime($log['created_at'])) ?>">
-            
-            <!-- Action Icon -->
-            <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold
-                <?php 
-                    switch($log['action_type']) {
-                        case 'create': echo 'bg-green-500'; break;
-                        case 'update': echo 'bg-blue-500'; break;
-                        case 'delete': echo 'bg-red-500'; break;
-                        case 'login': echo 'bg-purple-500'; break;
-                        case 'logout': echo 'bg-gray-500'; break;
-                        case 'enable': echo 'bg-emerald-500'; break;
-                        case 'disable': echo 'bg-orange-500'; break;
-                        default: echo 'bg-gray-400';
-                    }
-                ?>">
-                <?php 
-                    switch($log['action_type']) {
-                        case 'create': echo '➕'; break;
-                        case 'update': echo '✏️'; break;
-                        case 'delete': echo '🗑️'; break;
-                        case 'login': echo '🔐'; break;
-                        case 'logout': echo '🚪'; break;
-                        case 'enable': echo '✅'; break;
-                        case 'disable': echo '❌'; break;
-                        default: echo '📝';
-                    }
-                ?>
-            </div>
-            
-            <!-- Log Details -->
-            <div class="flex-grow min-w-0">
-                <div class="flex items-center justify-between mb-1">
-                    <h4 class="font-medium truncate" style="color: var(--text-primary)">
-                        <?= htmlspecialchars($log['description']) ?>
-                    </h4>
-                    <span class="text-xs px-2 py-1 rounded-full font-medium
-                        <?php 
+        <tr class="log-item transition-colors"
+            style="border-bottom: 1px solid var(--border-primary)"
+            data-action="<?= $log['action_type'] ?>"
+            data-user="<?= $log['user_id'] ?>"
+            data-date="<?= date('Y-m-d', strtotime($log['created_at'])) ?>"
+            onmouseover="this.style.background='var(--bg-secondary)'; this.style.opacity='0.8'"
+            onmouseout="this.style.background='transparent'; this.style.opacity='1'">
+
+            <!-- Action Badge -->
+            <td class="px-4 py-3">
+                <span class="inline-flex items-center text-xs px-2.5 py-1 rounded-full font-medium
+                    <?php
+                        switch($log['action_type']) {
+                            case 'create': echo 'bg-green-100 text-green-800'; break;
+                            case 'update': echo 'bg-blue-100 text-blue-800'; break;
+                            case 'delete': echo 'bg-red-100 text-red-800'; break;
+                            case 'login': case 'logout': echo 'bg-purple-100 text-purple-800'; break;
+                            case 'enable': echo 'bg-emerald-100 text-emerald-800'; break;
+                            case 'disable': echo 'bg-orange-100 text-orange-800'; break;
+                            default: echo 'bg-gray-100 text-gray-800';
+                        }
+                    ?>">
+                    <span class="mr-1">
+                        <?php
                             switch($log['action_type']) {
-                                case 'create': echo 'bg-green-100 text-green-800'; break;
-                                case 'update': echo 'bg-blue-100 text-blue-800'; break;
-                                case 'delete': echo 'bg-red-100 text-red-800'; break;
-                                case 'login': case 'logout': echo 'bg-purple-100 text-purple-800'; break;
-                                case 'enable': echo 'bg-emerald-100 text-emerald-800'; break;
-                                case 'disable': echo 'bg-orange-100 text-orange-800'; break;
-                                default: echo 'bg-gray-100 text-gray-800';
+                                case 'create': echo '➕'; break;
+                                case 'update': echo '✏️'; break;
+                                case 'delete': echo '🗑️'; break;
+                                case 'login': echo '🔐'; break;
+                                case 'logout': echo '🚪'; break;
+                                case 'enable': echo '✅'; break;
+                                case 'disable': echo '❌'; break;
+                                default: echo '📝';
                             }
-                        ?>">
-                        <?= ucfirst($log['action_type']) ?>
+                        ?>
                     </span>
-                </div>
-                
-                <div class="flex items-center text-sm space-x-4" style="color: var(--text-secondary)">
-                    <span>👤 <?= htmlspecialchars($log['username'] ?? 'System') ?></span>
-                    <span>🕐 <?= date('M j, Y g:i A', strtotime($log['created_at'])) ?></span>
-                    <?php if ($log['table_name']): ?>
-                        <span>📋 <?= ucfirst($log['table_name']) ?></span>
-                    <?php endif; ?>
-                    <?php if ($log['ip_address']): ?>
-                        <span>🌐 <?= htmlspecialchars($log['ip_address']) ?></span>
-                    <?php endif; ?>
-                </div>
-                
-                <!-- Show changes if available -->
+                    <?= ucfirst($log['action_type']) ?>
+                </span>
+            </td>
+
+            <!-- Description -->
+            <td class="px-4 py-3 font-medium" style="color: var(--text-primary)">
+                <?= htmlspecialchars($log['description']) ?>
+            </td>
+
+            <!-- User -->
+            <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                <?= htmlspecialchars($log['username'] ?? 'System') ?>
+            </td>
+
+            <!-- Table -->
+            <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                <?= $log['table_name'] ? ucfirst($log['table_name']) : '-' ?>
+            </td>
+
+            <!-- Date & Time -->
+            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--text-secondary)">
+                <?= date('M j, Y g:i A', strtotime($log['created_at'])) ?>
+            </td>
+
+            <!-- IP Address -->
+            <td class="px-4 py-3 text-sm" style="color: var(--text-secondary)">
+                <?= $log['ip_address'] ? htmlspecialchars($log['ip_address']) : '-' ?>
+            </td>
+
+            <!-- Changes Button -->
+            <td class="px-4 py-3 text-center">
                 <?php if ($log['old_values'] || $log['new_values']): ?>
-                    <button onclick="toggleDetails(<?= $log['id'] ?>)" 
-                            class="text-xs text-blue-600 hover:text-blue-800 mt-2 font-medium">
-                        View Changes
+                    <button onclick="toggleDetails(<?= $log['id'] ?>)"
+                            class="text-xs text-blue-600 hover:text-blue-800 font-medium px-2 py-1 rounded hover:bg-blue-50">
+                        View
                     </button>
-                    <div id="details-<?= $log['id'] ?>" class="hidden mt-3 p-3 rounded-lg bg-gray-100">
+                <?php else: ?>
+                    <span class="text-xs" style="color: var(--text-secondary)">-</span>
+                <?php endif; ?>
+            </td>
+        </tr>
+
+        <!-- Changes Details Row (Hidden by default) -->
+        <?php if ($log['old_values'] || $log['new_values']): ?>
+            <tr id="details-<?= $log['id'] ?>" class="hidden" style="background: var(--bg-secondary)">
+                <td colspan="7" class="px-4 py-3">
+                    <div class="p-3 rounded-lg bg-gray-100">
                         <?php if ($log['old_values']): ?>
                             <div class="mb-2">
                                 <strong class="text-xs text-red-600">Previous Values:</strong>
-                                <pre class="text-xs mt-1 text-gray-600"><?= htmlspecialchars(json_encode(json_decode($log['old_values']), JSON_PRETTY_PRINT)) ?></pre>
+                                <pre class="text-xs mt-1 text-gray-600 overflow-x-auto"><?= htmlspecialchars(json_encode(json_decode($log['old_values']), JSON_PRETTY_PRINT)) ?></pre>
                             </div>
                         <?php endif; ?>
                         <?php if ($log['new_values']): ?>
                             <div>
                                 <strong class="text-xs text-green-600">New Values:</strong>
-                                <pre class="text-xs mt-1 text-gray-600"><?= htmlspecialchars(json_encode(json_decode($log['new_values']), JSON_PRETTY_PRINT)) ?></pre>
+                                <pre class="text-xs mt-1 text-gray-600 overflow-x-auto"><?= htmlspecialchars(json_encode(json_decode($log['new_values']), JSON_PRETTY_PRINT)) ?></pre>
                             </div>
                         <?php endif; ?>
                     </div>
-                <?php endif; ?>
-            </div>
-        </div>
+                </td>
+            </tr>
+        <?php endif; ?>
 <?php
     endforeach;
     $html = ob_get_clean();
-    
+
         echo json_encode([
             'success' => true,
             'html' => $html,
@@ -143,6 +189,63 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_more_logs') {
         ]);
     }
     exit();
+}
+
+// Handle settings update
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $current_page === 'settings') {
+    if (!Security::validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        $error = 'Invalid request';
+    } else {
+        // Update tax enabled toggle
+        if (isset($_POST['update_tax_enabled'])) {
+            $tax_enabled = isset($_POST['tax_enabled']) && $_POST['tax_enabled'] === '1' ? 1 : 0;
+
+            $update_query = "UPDATE restaurants SET tax_enabled = :tax_enabled WHERE id = :restaurant_id";
+            $update_stmt = $db->prepare($update_query);
+            $update_stmt->bindParam(':tax_enabled', $tax_enabled, PDO::PARAM_INT);
+            $update_stmt->bindParam(':restaurant_id', $restaurant_id, PDO::PARAM_INT);
+
+            if ($update_stmt->execute()) {
+                ActivityLogger::log('update', 'Updated tax enabled setting', 'restaurants', $restaurant_id,
+                    ['tax_enabled' => $restaurant['tax_enabled']],
+                    ['tax_enabled' => $tax_enabled]
+                );
+                // Clear restaurant cache and refresh data
+                unset($_SESSION['restaurant_cached_data']);
+                unset($_SESSION['restaurant_cache_time']);
+                $restaurant = Restaurant::getCurrentRestaurant(true);
+                // Redirect to clear POST data
+                header('Location: admin.php?page=settings');
+                exit();
+            }
+        }
+
+        // Update tax rate
+        if (isset($_POST['update_tax_rate'])) {
+            // Convert percentage to decimal (e.g., 8.5 -> 0.085)
+            $tax_rate_input = isset($_POST['tax_rate']) ? (float)$_POST['tax_rate'] : ($restaurant['tax_rate'] * 100);
+            $tax_rate = $tax_rate_input / 100;
+
+            $update_query = "UPDATE restaurants SET tax_rate = :tax_rate WHERE id = :restaurant_id";
+            $update_stmt = $db->prepare($update_query);
+            $update_stmt->bindParam(':tax_rate', $tax_rate);
+            $update_stmt->bindParam(':restaurant_id', $restaurant_id, PDO::PARAM_INT);
+
+            if ($update_stmt->execute()) {
+                ActivityLogger::log('update', 'Updated tax rate', 'restaurants', $restaurant_id,
+                    ['tax_rate' => $restaurant['tax_rate']],
+                    ['tax_rate' => $tax_rate]
+                );
+                $success = 'Tax rate updated successfully';
+                // Clear restaurant cache and refresh data
+                unset($_SESSION['restaurant_cached_data']);
+                unset($_SESSION['restaurant_cache_time']);
+                $restaurant = Restaurant::getCurrentRestaurant(true);
+            } else {
+                $error = 'Failed to update tax rate';
+            }
+        }
+    }
 }
 
 // Handle product management
