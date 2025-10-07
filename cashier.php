@@ -34,6 +34,33 @@ if ($_POST && isset($_POST['action'])) {
         }
     }
 
+    // Handle saving cashier settings (requires CSRF token)
+    if ($_POST['action'] === 'save_cashier_settings') {
+        if (!Security::validateCSRFToken($_POST['csrf_token'] ?? '')) {
+            echo json_encode(['success' => false, 'message' => 'Invalid request']);
+            exit();
+        }
+
+        try {
+            $settings = $_POST['settings'] ?? '';
+            $restaurant_id = Security::getRestaurantId();
+
+            $db = Database::getInstance()->getConnection();
+            $stmt = $db->prepare("UPDATE restaurants SET cashier_settings = :settings WHERE id = :restaurant_id");
+            $stmt->bindParam(':settings', $settings);
+            $stmt->bindParam(':restaurant_id', $restaurant_id);
+            $stmt->execute();
+
+            ActivityLogger::log('update', 'Updated cashier settings', 'restaurants', $restaurant_id);
+
+            echo json_encode(['success' => true, 'message' => 'Settings saved successfully']);
+            exit();
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => 'Failed to save settings: ' . $e->getMessage()]);
+            exit();
+        }
+    }
+
     if (!Security::validateCSRFToken($_POST['csrf_token'] ?? '')) {
         echo json_encode(['success' => false, 'message' => 'Invalid request']);
         exit();
@@ -1270,9 +1297,9 @@ $category_names = array_keys($categories);
                     <!-- Quick Amount Buttons -->
                     <div class="flex space-x-1">
                         <button onclick="setExactAmount()" class="flex-1 bg-green-500 hover:bg-green-600 text-white px-2 py-1 rounded text-xs font-medium">Exact</button>
-                        <button onclick="addQuickAmount(10)" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+10</button>
-                        <button onclick="addQuickAmount(20)" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+20</button>
-                        <button onclick="addQuickAmount(50)" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+50</button>
+                        <button id="quick-btn-0" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+10</button>
+                        <button id="quick-btn-1" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+20</button>
+                        <button id="quick-btn-2" class="flex-1 px-2 py-1 rounded text-xs font-medium text-white transition-opacity hover:opacity-80" style="background: var(--accent-primary);">+50</button>
                     </div>
 
                     <!-- Change Display -->
@@ -1626,7 +1653,8 @@ $category_names = array_keys($categories);
             currency: '<?= htmlspecialchars($restaurant['currency']) ?>',
             taxEnabled: <?= !empty($restaurant['tax_enabled']) ? 'true' : 'false' ?>,
             taxRate: <?= $restaurant['tax_rate'] ?? 0.0850 ?>,
-            name: '<?= htmlspecialchars($restaurant['name']) ?>'
+            name: '<?= htmlspecialchars($restaurant['name']) ?>',
+            cashierSettings: <?= !empty($restaurant['cashier_settings']) ? $restaurant['cashier_settings'] : 'null' ?>
         };
         let cart = <?= json_encode($_SESSION['cart'] ?? []) ?>;
         let currentTotal = 0;
@@ -1928,7 +1956,6 @@ $category_names = array_keys($categories);
                 }
             }
             
-            console.log(`Optimistic update - Product ${productId}: Badge found=${!!stockBadge}, Effective=${effectiveStock}, Current Cart=${currentCartQuantity}, Adding=${quantityToAdd}`);
             
             if (stockBadge) {
                 let badgeColor, badgeText, textColor;
@@ -1967,7 +1994,6 @@ $category_names = array_keys($categories);
             const effectiveStock = Math.max(0, originalStock - cartQuantity);
             
             const stockBadge = document.getElementById(`stock-badge-${productId}`);
-            console.log(`Single update - Product ${productId}: Badge=${!!stockBadge}, Effective=${effectiveStock}`);
             
             if (stockBadge) {
                 let badgeColor, badgeText, textColor;
@@ -2030,7 +2056,6 @@ $category_names = array_keys($categories);
                     
                     // Update the data attribute to the new stock level
                     productCard.setAttribute('data-current-stock', newStock.toString());
-                    console.log(`Updated product ${productId} stock data: ${originalStock} → ${newStock}`);
                 }
             }
         }
@@ -2284,13 +2309,6 @@ $category_names = array_keys($categories);
             const total = subtotal + tax_amount;
             currentTotal = total;
 
-            console.log('Tax Calculation Debug:', {
-                subtotal: subtotal,
-                taxEnabled: restaurantConfig.taxEnabled,
-                taxRate: restaurantConfig.taxRate,
-                taxAmount: tax_amount,
-                total: total
-            });
 
             cartItems.innerHTML = html;
 
@@ -2304,9 +2322,7 @@ $category_names = array_keys($categories);
             const taxElement = document.getElementById('tax-amount');
             if (taxElement) {
                 taxElement.textContent = formatCurrency(tax_amount);
-                console.log('Tax element updated with:', formatCurrency(tax_amount));
             } else {
-                console.log('Tax element not found - tax might be disabled');
             }
 
             // Animate cart badge if item count changed
@@ -2347,15 +2363,18 @@ $category_names = array_keys($categories);
                 showToast('Payment system error', true);
                 return;
             }
-            
+
             paymentModal.classList.remove('hidden');
             document.getElementById('modal-total').textContent = formatCurrency(currentTotal);
             document.getElementById('qr-total').textContent = `Total: ${formatCurrency(currentTotal)}`;
-            
+
             // Apply default payment method from settings
             const settings = getCashierSettings();
             selectPaymentMethod(settings.workflow.defaultPayment);
             clearAmount();
+
+            // Update quick amount buttons with saved values
+            updateQuickAmountButtons();
         }
 
         function closePaymentModal() {
@@ -2560,13 +2579,11 @@ $category_names = array_keys($categories);
             })
             .then(response => response.json())
             .then(data => {
-                console.log('Payment response received:', data);
                 if (data.success) {
                     // Update frontend stock data to match database after successful payment
                     updateStockDataAfterPayment();
 
                     // Store cart items BEFORE any operations
-                    console.log('Current cart before copy:', cart);
                     const cartItems = {};
                     for (const [id, item] of Object.entries(cart)) {
                         cartItems[id] = {
@@ -2576,7 +2593,6 @@ $category_names = array_keys($categories);
                             quantity: parseInt(item.quantity)
                         };
                     }
-                    console.log('Cart items copied:', cartItems);
 
                     // Store order data INCLUDING cart items before clearing cart
                     const orderData = {
@@ -2609,15 +2625,6 @@ $category_names = array_keys($categories);
                         showToast('Payment completed successfully!');
                     }
                 } else {
-                    console.log('Payment failed with data:', data);
-                    console.log('Frontend payment data sent:', paymentData);
-                    console.log('Frontend currentTotal:', currentTotal);
-                    console.log('Frontend amountTendered:', amountTendered);
-                    console.log('Frontend currentPaymentMethod:', currentPaymentMethod);
-                    
-                    if (data.debug) {
-                        console.log('Backend Debug Info:', data.debug);
-                    }
                     showToast(data.message, true);
                 }
             })
@@ -2688,7 +2695,6 @@ $category_names = array_keys($categories);
                     updateCartDisplay();
                     showToast('Order cleared');
                 } else {
-                    console.log('Clear cart failed:', data);
                     showToast('Failed to clear cart: ' + (data.message || 'Unknown error'), true);
                 }
             })
@@ -2900,6 +2906,10 @@ $category_names = array_keys($categories);
             document.body.setAttribute('data-theme', theme);
             localStorage.setItem('pos-theme', theme);
 
+            // Update cashierSettings and save to database
+            cashierSettings.theme.mode = theme;
+            saveCashierSettings();
+
             const themeIcon = document.getElementById('theme-icon');
             const themeText = document.getElementById('theme-text');
             const dropdown = document.getElementById('theme-dropdown');
@@ -2920,6 +2930,7 @@ $category_names = array_keys($categories);
 
             // Update theme selection in settings modal
             updateThemeSelection(theme);
+
         }
         
         function updateProductCardTheme(theme) {
@@ -3241,8 +3252,19 @@ $category_names = array_keys($categories);
             }
         };
 
-        // Load settings from localStorage
+        // Load settings from database (via restaurantConfig) or localStorage as fallback
         function loadCashierSettings() {
+            // Try to load from database first
+            if (restaurantConfig.cashierSettings) {
+                try {
+                    cashierSettings = {...cashierSettings, ...restaurantConfig.cashierSettings};
+                    return;
+                } catch (e) {
+                    console.warn('Failed to load settings from database:', e);
+                }
+            }
+
+            // Fallback to localStorage
             const saved = localStorage.getItem('cashierSettings');
             if (saved) {
                 try {
@@ -3252,12 +3274,30 @@ $category_names = array_keys($categories);
                     console.warn('Failed to load saved settings:', e);
                 }
             }
-            console.log('Cashier settings loaded:', cashierSettings);
         }
 
-        // Save settings to localStorage
+        // Save settings to database
         function saveCashierSettings() {
+            // Save to localStorage for immediate backup
             localStorage.setItem('cashierSettings', JSON.stringify(cashierSettings));
+
+            // Save to database
+            fetch('cashier.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `action=save_cashier_settings&csrf_token=${csrfToken}&settings=${encodeURIComponent(JSON.stringify(cashierSettings))}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.success) {
+                    console.error('Failed to save settings:', data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error saving settings:', error);
+            });
         }
 
         // Apply all settings to the interface
@@ -3353,8 +3393,6 @@ $category_names = array_keys($categories);
 
                 oscillator.start(audioContext.currentTime);
                 oscillator.stop(audioContext.currentTime + 0.05);
-
-                console.log('🔊 Click sound played');
             } catch (e) {
                 console.warn('Failed to play click sound:', e);
             }
@@ -3402,8 +3440,6 @@ $category_names = array_keys($categories);
                     oscillator.start(startTime);
                     oscillator.stop(startTime + 0.4);
                 });
-                
-                console.log('🎉 Success sound played');
             } catch (e) {
                 console.warn('Failed to play success sound:', e);
             }
@@ -3431,12 +3467,10 @@ $category_names = array_keys($categories);
         function setNumpadLayout(layout) {
             cashierSettings.numpad.layout = layout;
             saveCashierSettings();
-            
+
             // Apply layout and update UI
             applyNumpadLayout(layout);
             updateNumpadLayoutSelection(layout);
-            
-            console.log(`Numpad layout set to: ${layout}`);
         }
 
         function applyNumpadLayout(layout) {
@@ -3492,19 +3526,15 @@ $category_names = array_keys($categories);
                     numpadContainer.appendChild(button);
                 }
             });
-            
-            console.log(`Applied ${layout} numpad layout`);
         }
 
         // Workflow Settings
         function setDefaultPayment(method) {
             cashierSettings.workflow.defaultPayment = method;
             saveCashierSettings();
-            
+
             // Update UI to show current selection
             updateDefaultPaymentSelection(method);
-            
-            console.log(`Default payment method set to: ${method}`);
         }
 
         function toggleWorkflowSetting(setting, enabled) {
@@ -3516,21 +3546,24 @@ $category_names = array_keys($categories);
             const quick1 = parseInt(document.getElementById('quick1').value) || 10;
             const quick2 = parseInt(document.getElementById('quick2').value) || 20;
             const quick3 = parseInt(document.getElementById('quick3').value) || 50;
-            
+
             cashierSettings.workflow.quickAmounts = [quick1, quick2, quick3];
             saveCashierSettings();
             updateQuickAmountButtons();
         }
 
         function updateQuickAmountButtons() {
-            const buttons = document.querySelectorAll('[onclick^="addQuickAmount"]');
-            buttons.forEach((btn, index) => {
-                if (index < cashierSettings.workflow.quickAmounts.length) {
-                    const amount = cashierSettings.workflow.quickAmounts[index];
+            for (let i = 0; i < cashierSettings.workflow.quickAmounts.length; i++) {
+                const amount = cashierSettings.workflow.quickAmounts[i];
+                const btn = document.getElementById(`quick-btn-${i}`);
+
+                if (btn) {
                     btn.textContent = `+${amount}`;
                     btn.onclick = () => addQuickAmount(amount);
+                } else {
+                    console.error(`❌ Button quick-btn-${i} NOT FOUND in DOM!`);
                 }
-            });
+            }
         }
         
         // Initialize cashier settings system
@@ -3552,8 +3585,6 @@ $category_names = array_keys($categories);
             
             // Update all UI selections to reflect current settings
             updateAllSettingsUI();
-            
-            console.log('Cashier settings initialized:', cashierSettings);
         }
         
         // Update all settings UI to show current selections
@@ -3578,8 +3609,20 @@ $category_names = array_keys($categories);
                 // Update default payment method
                 updateDefaultPaymentSelection(cashierSettings.workflow.defaultPayment);
 
-                console.log('Settings UI updated for:', cashierSettings.display.textSize);
+                // Update quick amount inputs
+                updateQuickAmountInputs();
             }, 200);
+        }
+
+        // Update quick amount input fields in settings modal
+        function updateQuickAmountInputs() {
+            const quick1 = document.getElementById('quick1');
+            const quick2 = document.getElementById('quick2');
+            const quick3 = document.getElementById('quick3');
+
+            if (quick1) quick1.value = cashierSettings.workflow.quickAmounts[0] || 10;
+            if (quick2) quick2.value = cashierSettings.workflow.quickAmounts[1] || 20;
+            if (quick3) quick3.value = cashierSettings.workflow.quickAmounts[2] || 50;
         }
         
         // Update theme selection in UI
@@ -3618,14 +3661,23 @@ $category_names = array_keys($categories);
         
         // Update currency format selection in UI
         function updateCurrencyFormatSelection(format) {
+            const selectElement = document.getElementById('currency-format');
+            if (selectElement) {
+                selectElement.value = format;
+            } else {
+                console.warn('Currency format dropdown not found');
+            }
+        }
+
+        function updateCurrencyFormatSelection_old(format) {
             document.querySelectorAll('[id^="currency-"]').forEach(btn => {
                 btn.style.background = 'var(--bg-primary)';
                 btn.style.fontWeight = 'normal';
                 btn.style.color = 'var(--text-primary)';
             });
-            
+
             const formatId = format.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-            const selectedBtn = document.getElementById(`currency-${formatId}`) || 
+            const selectedBtn = document.getElementById(`currency-${formatId}`) ||
                               document.getElementById('currency-rm0-00'); // fallback
             if (selectedBtn) {
                 selectedBtn.style.background = 'var(--accent-primary)';
@@ -3648,7 +3700,6 @@ $category_names = array_keys($categories);
             const defaultPaymentSelect = document.getElementById('default-payment');
             if (defaultPaymentSelect) {
                 defaultPaymentSelect.value = method;
-                console.log(`Default payment select updated to: ${method}`);
             }
         }
         
@@ -3664,11 +3715,9 @@ $category_names = array_keys($categories);
             
             // Set CSS custom property for text scaling
             document.documentElement.style.setProperty('--text-scale', scale);
-            
+
             // Update settings UI to reflect current selection
             updateTextSizeSelection(size);
-            
-            console.log(`Text scale applied: ${scale} (${size})`);
         }
         
         // Update text size selection in settings UI
@@ -3676,7 +3725,6 @@ $category_names = array_keys($categories);
             const textSizeSelect = document.getElementById('text-size');
             if (textSizeSelect) {
                 textSizeSelect.value = size;
-                console.log(`Text size select updated to: ${size}`);
             }
         }
         
