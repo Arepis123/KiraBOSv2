@@ -1,0 +1,14 @@
+{
+  "name": "KiraBOS - Point of Sale System",
+  "short_name": "KiraBOS",
+  "description": "Multi-tenant Point of Sale system with offline support",
+  "start_url": "cashier.php",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#6366f1",
+  "orientation": "portrait",
+  "icons": [],
+  "categories": ["business", "finance", "productivity"],
+  "screenshots": [],
+  "prefer_related_applications": false
+}

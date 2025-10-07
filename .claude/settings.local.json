@@ -50,7 +50,10 @@
       "Bash(start http://localhost/KiraBOSv2/test_receipt.php)",
       "Bash(start http://localhost/KiraBOSv2/debug_payment.php)",
       "Bash(start http://localhost/KiraBOSv2/check_orders_table.php)",
-      "Bash(start http://localhost/KiraBOSv2/check_cashier_settings.php)"
+      "Bash(start http://localhost/KiraBOSv2/check_cashier_settings.php)",
+      "Bash(start http://localhost/KiraBOSv2/clear_cache.html)",
+      "Bash(set /p=\"?v=\")",
+      "Bash(start http://localhost/KiraBOSv2/force_clear.html)"
     ],
     "deny": [],
     "ask": []

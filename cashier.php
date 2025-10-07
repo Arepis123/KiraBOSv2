@@ -388,7 +388,14 @@ $category_names = array_keys($categories);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#6366f1">
+    <meta name="description" content="KiraBOS Point of Sale System with offline support">
     <title>KiraBOS - Cashier</title>
+
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+
+    <!-- Tailwind CSS Play CDN (for development/prototyping) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
@@ -817,6 +824,20 @@ $category_names = array_keys($categories);
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script>
+        // Force unregister old service workers immediately
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                for (let registration of registrations) {
+                    // Unregister any service worker with wrong scope or old version
+                    if (registration.scope.includes('https://') ||
+                        registration.scope !== window.location.origin + '/KiraBOSv2/') {
+                        registration.unregister();
+                        console.log('Force unregistered old SW:', registration.scope);
+                    }
+                }
+            });
+        }
+
         // Apply theme immediately before page renders to prevent flash
         (function() {
             const savedTheme = localStorage.getItem('pos-theme') || 'colorful';
@@ -854,6 +875,11 @@ $category_names = array_keys($categories);
                         </div>
                     </div>
                     <div class="flex items-center space-x-2 sm:space-x-4">
+                        <!-- Network Status Indicator -->
+                        <div id="network-status" class="flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-700 cursor-pointer" title="Connection status" onclick="manualSync()">
+                            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                            <span class="hidden sm:inline">Online</span>
+                        </div>
                         <span class="text-xs sm:text-sm text-gray-600 hidden xs:inline">Welcome, <?= htmlspecialchars($_SESSION['first_name'] ?? $_SESSION['username']) ?></span>
                         <span class="text-xs sm:text-sm text-gray-600 xs:hidden"><?= htmlspecialchars($_SESSION['first_name'] ?? $_SESSION['username']) ?></span>
                         <a href="logout.php" class="text-accent hover:text-red-600 text-xs sm:text-sm font-medium">Logout</a>
@@ -2578,8 +2604,43 @@ $category_names = array_keys($categories);
                 body: Object.keys(paymentData).map(key => key + '=' + encodeURIComponent(paymentData[key])).join('&')
             })
             .then(response => response.json())
-            .then(data => {
+            .then(async data => {
                 if (data.success) {
+                    // Check if this was an offline order
+                    if (data.offline) {
+                        // Calculate totals from cart
+                        let subtotal = 0;
+                        for (const item of Object.values(cart)) {
+                            subtotal += parseFloat(item.price) * parseInt(item.quantity);
+                        }
+                        const tax_rate = <?= $restaurant['tax_rate'] ?>;
+                        const tax_amount = subtotal * tax_rate;
+                        const total = subtotal + tax_amount;
+
+                        const orderData = {
+                            payment_method: currentPaymentMethod,
+                            payment_received: paymentData.amount_tendered || 0,
+                            cart_items: {...cart},
+                            order_number: 'OFFLINE-' + Date.now(),
+                            timestamp: Date.now(),
+                            subtotal: subtotal,
+                            tax_amount: tax_amount,
+                            total: total
+                        };
+
+                        // Store order in IndexedDB for sync later
+                        await saveOrderOffline(orderData);
+
+                        // Clear cart and close modal
+                        cart = {};
+                        updateCartDisplay();
+                        closePaymentModal();
+                        playSuccessSound();
+                        showNotification('Order saved offline. Will sync when online.', 'warning');
+                        updateNetworkStatus();
+                        return;
+                    }
+
                     // Update frontend stock data to match database after successful payment
                     updateStockDataAfterPayment();
 
@@ -3850,6 +3911,452 @@ $category_names = array_keys($categories);
         window.addEventListener('load', function() {
             updateProductCardTheme(currentTheme);
         });
+
+        // ============================================
+        // PWA & OFFLINE FUNCTIONALITY
+        // ============================================
+
+        // Configuration
+        const APP_VERSION = '1.0.0';
+        const ENABLE_OFFLINE = true;
+        const ENABLE_ERROR_LOGGING = <?= json_encode($isProduction ?? false) ?>; // Enable in production
+
+        // Environment detection
+        const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+
+        // Register Service Worker
+        if (ENABLE_OFFLINE && 'serviceWorker' in navigator) {
+            window.addEventListener('load', async () => {
+                try {
+                    // Get the current directory path dynamically
+                    const currentPath = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
+
+                    // Register the new service worker with correct path
+                    const registration = await navigator.serviceWorker.register('./sw.js', {
+                        scope: './'
+                    });
+
+                    // Check for updates
+                    registration.addEventListener('updatefound', () => {
+                        const newWorker = registration.installing;
+                        newWorker.addEventListener('statechange', () => {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                // New version available
+                                showUpdateNotification();
+                            }
+                        });
+                    });
+
+                    // Listen for messages from service worker
+                    navigator.serviceWorker.addEventListener('message', (event) => {
+                        if (event.data && event.data.type === 'SYNC_SUCCESS') {
+                            showSyncNotification(event.data.orderId);
+                        }
+                    });
+                } catch (error) {
+                    console.error('Service Worker registration failed:', error);
+                    // Log to server for production monitoring
+                    logErrorToServer('SW Registration Failed', error);
+                }
+            });
+        }
+
+        // Error logging function for production
+        function logErrorToServer(context, error) {
+            // Only log in production or if explicitly enabled
+            if (!ENABLE_ERROR_LOGGING && !isLocalhost) return;
+
+            try {
+                const errorData = {
+                    context: context,
+                    message: error.message || String(error),
+                    stack: error.stack || '',
+                    url: window.location.href,
+                    userAgent: navigator.userAgent,
+                    timestamp: new Date().toISOString(),
+                    version: APP_VERSION
+                };
+
+                // Send to server (non-blocking)
+                fetch('log_error.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(errorData)
+                }).catch(() => {}); // Silent fail if logging fails
+
+                // Also log to console in development
+                if (isLocalhost) {
+                    console.group(`🔴 ${context}`);
+                    console.error('Error:', error);
+                    console.groupEnd();
+                }
+            } catch (e) {
+                // Don't let logging errors break the app
+            }
+        }
+
+        // IndexedDB helper for offline storage
+        let offlineDB;
+
+        function openOfflineDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open('kirabos-offline', 1);
+
+                request.onerror = () => reject(request.error);
+                request.onsuccess = () => {
+                    offlineDB = request.result;
+                    resolve(offlineDB);
+                };
+
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+
+                    // Create object stores
+                    if (!db.objectStoreNames.contains('pending-orders')) {
+                        const orderStore = db.createObjectStore('pending-orders', { keyPath: 'id', autoIncrement: true });
+                        orderStore.createIndex('timestamp', 'timestamp', { unique: false });
+                        orderStore.createIndex('synced', 'synced', { unique: false });
+                    }
+
+                    if (!db.objectStoreNames.contains('sync-queue')) {
+                        db.createObjectStore('sync-queue', { keyPath: 'id', autoIncrement: true });
+                    }
+                };
+            });
+        }
+
+        // Save order to IndexedDB when offline
+        async function saveOrderOffline(orderData) {
+            const db = await openOfflineDB();
+            const tx = db.transaction('pending-orders', 'readwrite');
+            const store = tx.objectStore('pending-orders');
+
+            const order = {
+                ...orderData,
+                timestamp: Date.now(),
+                synced: false,
+                offline: true
+            };
+
+            return new Promise((resolve, reject) => {
+                const request = store.add(order);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Sync state management
+        let isSyncing = false;
+
+        // Get pending orders count
+        async function getPendingOrdersCount() {
+            try {
+                const db = await openOfflineDB();
+                const tx = db.transaction('pending-orders', 'readonly');
+                const store = tx.objectStore('pending-orders');
+                const request = store.getAll();
+
+                return new Promise((resolve) => {
+                    request.onsuccess = () => {
+                        const allOrders = request.result;
+                        const pendingCount = allOrders.filter(order => !order.synced).length;
+                        resolve(pendingCount);
+                    };
+                    request.onerror = () => {
+                        resolve(0);
+                    };
+                });
+            } catch (e) {
+                console.error('Exception in getPendingOrdersCount:', e);
+                return 0;
+            }
+        }
+
+        // Clean up synced orders from IndexedDB
+        async function cleanupSyncedOrders() {
+            try {
+                const db = await openOfflineDB();
+                const tx = db.transaction('pending-orders', 'readwrite');
+                const store = tx.objectStore('pending-orders');
+                const request = store.getAll();
+
+                return new Promise((resolve) => {
+                    request.onsuccess = async () => {
+                        const allOrders = request.result;
+                        const syncedOrders = allOrders.filter(order => order.synced);
+
+                        for (const order of syncedOrders) {
+                            const deleteTx = db.transaction('pending-orders', 'readwrite');
+                            const deleteStore = deleteTx.objectStore('pending-orders');
+                            await deleteStore.delete(order.id);
+                        }
+
+                        resolve(syncedOrders.length);
+                    };
+                    request.onerror = () => resolve(0);
+                });
+            } catch (e) {
+                console.error('Error cleaning up synced orders:', e);
+                return 0;
+            }
+        }
+
+        // Sync pending orders when back online
+        async function syncPendingOrders() {
+            if (isSyncing) return; // Prevent concurrent syncs
+
+            try {
+                isSyncing = true;
+                updateNetworkStatus(true); // Update UI to show syncing
+
+                const db = await openOfflineDB();
+                const tx = db.transaction('pending-orders', 'readonly');
+                const store = tx.objectStore('pending-orders');
+                const request = store.getAll();
+
+                return new Promise((resolve) => {
+                    request.onsuccess = async () => {
+                        const allOrders = request.result;
+                        const pendingOrders = allOrders.filter(order => !order.synced);
+
+                        for (const order of pendingOrders) {
+                            try {
+
+                                // First, restore cart items to session by adding each item
+                                for (const [productId, item] of Object.entries(order.cart_items)) {
+                                    const addFormData = new FormData();
+                                    addFormData.append('action', 'add_to_cart');
+                                    addFormData.append('product_id', productId);
+                                    addFormData.append('quantity', item.quantity);
+                                    addFormData.append('csrf_token', csrfToken);
+
+                                    await fetch('cashier.php', {
+                                        method: 'POST',
+                                        body: addFormData
+                                    });
+                                }
+
+                                // Calculate change for cash payments
+                                let changeGiven = 0;
+                                if (order.payment_method === 'cash') {
+                                    changeGiven = (order.payment_received || 0) - (order.total || 0);
+                                }
+
+                                // Now submit the order
+                                const paymentData = {
+                                    action: 'checkout',
+                                    csrf_token: csrfToken,
+                                    payment_method: order.payment_method,
+                                    amount_tendered: order.payment_received || order.total || 0,
+                                    change_given: changeGiven
+                                };
+
+                                const response = await fetch('cashier.php', {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/x-www-form-urlencoded',
+                                    },
+                                    body: Object.keys(paymentData).map(key => key + '=' + encodeURIComponent(paymentData[key])).join('&')
+                                });
+
+                                const data = await response.json();
+
+                                if (data.success && !data.offline) {
+                                    // Mark as synced
+                                    order.synced = true;
+                                    const updateTx = db.transaction('pending-orders', 'readwrite');
+                                    const updateStore = updateTx.objectStore('pending-orders');
+                                    await updateStore.put(order);
+
+                                    showSyncNotification(data.order_number || order.order_number || 'Unknown');
+                                }
+                            } catch (error) {
+                                console.error('Failed to sync order:', error);
+                                logErrorToServer('Order Sync Failed', error);
+                            }
+                        }
+
+                        // Clean up synced orders
+                        await cleanupSyncedOrders();
+
+                        isSyncing = false;
+                        updateNetworkStatus(true); // Update UI after sync
+                        resolve();
+                    };
+
+                    request.onerror = () => {
+                        console.error('Failed to get pending orders');
+                        isSyncing = false;
+                        updateNetworkStatus(true);
+                        resolve();
+                    };
+                });
+            } catch (error) {
+                console.error('Error in syncPendingOrders:', error);
+                isSyncing = false;
+                updateNetworkStatus(true);
+            }
+        }
+
+        // Network status management
+        async function updateNetworkStatus(skipSync = false) {
+            const statusDiv = document.getElementById('network-status');
+            if (!statusDiv) return;
+
+            const isOnline = navigator.onLine;
+
+            if (isOnline) {
+                const count = await getPendingOrdersCount();
+
+                if (count > 0 && isSyncing) {
+                    // Currently syncing
+                    statusDiv.className = 'flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full bg-blue-100 text-blue-700';
+                    statusDiv.title = `Syncing ${count} order(s)...`;
+                    statusDiv.innerHTML = `
+                        <span class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                        <span class="hidden sm:inline">Syncing (${count})</span>
+                    `;
+                } else {
+                    statusDiv.className = 'flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-700 cursor-pointer';
+                    statusDiv.title = 'Connected to internet (click to sync)';
+                    statusDiv.innerHTML = `
+                        <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                        <span class="hidden sm:inline">Online</span>
+                    `;
+                }
+
+                // Try to sync pending orders (only if not already syncing and not skipping)
+                if (!skipSync && !isSyncing && count > 0) {
+                    syncPendingOrders().catch(console.error);
+                }
+            } else {
+                const count = await getPendingOrdersCount();
+                statusDiv.className = 'flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700 animate-pulse';
+                statusDiv.title = `Offline mode - ${count} order(s) pending sync`;
+                statusDiv.innerHTML = `
+                    <span class="w-2 h-2 bg-amber-500 rounded-full"></span>
+                    <span class="hidden sm:inline">Offline${count > 0 ? ` (${count})` : ''}</span>
+                `;
+            }
+        }
+
+        // Manual sync function (can be triggered by clicking status badge)
+        async function manualSync() {
+            const count = await getPendingOrdersCount();
+
+            if (count > 0 && navigator.onLine) {
+                await syncPendingOrders();
+            } else if (count === 0) {
+                showNotification('No pending orders to sync', 'info');
+            } else {
+                showNotification('Cannot sync while offline', 'warning');
+            }
+        }
+
+        // Listen for online/offline events
+        window.addEventListener('online', async () => {
+            await updateNetworkStatus();
+            showNotification('Back online! Syncing orders...', 'success');
+        });
+
+        window.addEventListener('offline', async () => {
+            await updateNetworkStatus();
+            showNotification('You are offline. Orders will be saved locally.', 'warning');
+        });
+
+        // Show notification helper
+        function showNotification(message, type = 'info') {
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg max-w-sm animate-slide-in ${
+                type === 'success' ? 'bg-green-500 text-white' :
+                type === 'warning' ? 'bg-amber-500 text-white' :
+                type === 'error' ? 'bg-red-500 text-white' :
+                'bg-blue-500 text-white'
+            }`;
+            notification.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i data-lucide="${type === 'success' ? 'check-circle' : type === 'warning' ? 'alert-triangle' : 'info'}" class="w-5 h-5"></i>
+                    <span class="text-sm font-medium">${message}</span>
+                </div>
+            `;
+
+            document.body.appendChild(notification);
+            lucide.createIcons();
+
+            // Remove after 4 seconds
+            setTimeout(() => {
+                notification.remove();
+            }, 4000);
+        }
+
+        // Show sync success notification
+        function showSyncNotification(orderId) {
+            showNotification(`Order ${orderId} synced successfully!`, 'success');
+            updateNetworkStatus();
+        }
+
+        // Show update notification
+        function showUpdateNotification() {
+            const notification = document.createElement('div');
+            notification.className = 'fixed top-4 right-4 z-50 bg-indigo-600 text-white px-4 py-3 rounded-lg shadow-lg max-w-sm';
+            notification.innerHTML = `
+                <div class="flex flex-col gap-2">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+                        <span class="text-sm font-medium">Update Available</span>
+                    </div>
+                    <p class="text-xs">A new version is available. Refresh to update.</p>
+                    <button onclick="location.reload()" class="mt-2 bg-white text-indigo-600 px-3 py-1 rounded text-xs font-medium">
+                        Refresh Now
+                    </button>
+                </div>
+            `;
+
+            document.body.appendChild(notification);
+            lucide.createIcons();
+        }
+
+        // Initialize network status on load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateNetworkStatus();
+            openOfflineDB().catch(console.error);
+        });
+
+        // Modify payment processing to handle offline mode
+        const originalProcessPayment = window.processPayment;
+        window.processPayment = async function() {
+            // Check if online
+            if (!navigator.onLine) {
+                // Save order offline
+                const orderData = {
+                    payment_method: currentPaymentMethod,
+                    payment_received: currentPaymentMethod === 'cash' ? parseFloat(document.getElementById('payment-input').value) : 0,
+                    cart_items: {...cart},
+                    order_number: 'OFFLINE-' + Date.now(),
+                    timestamp: Date.now()
+                };
+
+                try {
+                    await saveOrderOffline(orderData);
+                    showNotification('Order saved offline. Will sync when online.', 'warning');
+
+                    // Clear cart and close modal
+                    clearCart();
+                    closePaymentModal();
+                    updateNetworkStatus();
+                } catch (error) {
+                    console.error('Failed to save order offline:', error);
+                    showNotification('Failed to save order offline', 'error');
+                }
+                return;
+            }
+
+            // If online, use original function
+            if (originalProcessPayment) {
+                originalProcessPayment();
+            }
+        };
     </script>
 </body>
 </html>

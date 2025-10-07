@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline - KiraBOS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full text-center">
+        <!-- Offline Icon -->
+        <div class="mb-6">
+            <div class="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
+                <i data-lucide="wifi-off" class="w-12 h-12 text-gray-400"></i>
+            </div>
+        </div>
+
+        <!-- Title -->
+        <h1 class="text-3xl font-bold text-gray-900 mb-4">You're Offline</h1>
+
+        <!-- Description -->
+        <p class="text-gray-600 mb-6">
+            It seems you don't have an internet connection right now. Don't worry, KiraBOS works offline!
+        </p>
+
+        <!-- Features -->
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 text-left">
+            <h3 class="font-semibold text-blue-900 mb-3 flex items-center gap-2">
+                <i data-lucide="info" class="w-5 h-5"></i>
+                Offline Features
+            </h3>
+            <ul class="space-y-2 text-sm text-blue-800">
+                <li class="flex items-start gap-2">
+                    <i data-lucide="check-circle" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
+                    <span>Continue taking orders normally</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <i data-lucide="check-circle" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
+                    <span>Orders are saved locally on this device</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <i data-lucide="check-circle" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
+                    <span>Automatic sync when connection restored</span>
+                </li>
+            </ul>
+        </div>
+
+        <!-- Retry Button -->
+        <button
+            onclick="location.reload()"
+            class="w-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold py-3 px-6 rounded-lg hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 flex items-center justify-center gap-2 mb-4">
+            <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+            Try Again
+        </button>
+
+        <!-- Go to Cashier -->
+        <a
+            href="cashier.php"
+            class="block w-full bg-gray-100 text-gray-700 font-semibold py-3 px-6 rounded-lg hover:bg-gray-200 transition-all duration-200">
+            Go to Cashier (Offline Mode)
+        </a>
+
+        <!-- Connection Status -->
+        <div id="connection-status" class="mt-6 text-sm">
+            <span class="inline-flex items-center gap-2 text-red-600">
+                <span class="w-2 h-2 bg-red-600 rounded-full animate-pulse"></span>
+                No internet connection
+            </span>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // Monitor connection status
+        function updateConnectionStatus() {
+            const statusDiv = document.getElementById('connection-status');
+
+            if (navigator.onLine) {
+                statusDiv.innerHTML = `
+                    <span class="inline-flex items-center gap-2 text-green-600">
+                        <span class="w-2 h-2 bg-green-600 rounded-full"></span>
+                        Connected! Reloading...
+                    </span>
+                `;
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                statusDiv.innerHTML = `
+                    <span class="inline-flex items-center gap-2 text-red-600">
+                        <span class="w-2 h-2 bg-red-600 rounded-full animate-pulse"></span>
+                        No internet connection
+                    </span>
+                `;
+            }
+        }
+
+        // Listen for online/offline events
+        window.addEventListener('online', updateConnectionStatus);
+        window.addEventListener('offline', updateConnectionStatus);
+
+        // Check status on load
+        updateConnectionStatus();
+    </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# Error logs
+logs/
+*.log
+
+# Temporary files
+nul
+*.tmp
+
+# Debug/test files
+debug_*.php
+test_*.php
+check_*.php
+setup_*.php
+create_sample_*.php
+clear_cache.html
+force_clear.html
+
+# Environment-specific
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
